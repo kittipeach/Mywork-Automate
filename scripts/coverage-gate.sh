@@ -28,11 +28,12 @@ if [[ ! -f coverage.out ]]; then
   exit 1
 fi
 
-# main-package entrypoints under cmd/ are thin wiring (server start, signal
-# handling) validated by integration/e2e, not unit tests — excluded from the
-# unit-coverage gate. Build a filtered profile that keeps the mode header.
+# Excluded from the UNIT-coverage gate (validated by integration/e2e instead):
+#   /cmd/         — thin main-package wiring (server start, signal handling)
+#   /pgxquerier/  — real-Postgres adapter, covered by the `integration`-tagged test
+# Build a filtered profile that keeps the mode header.
 FILTERED=coverage.filtered.out
-grep -v '/cmd/' coverage.out > "$FILTERED"
+grep -vE '/cmd/|/pgxquerier/' coverage.out > "$FILTERED"
 
 while read -r file pct; do
   [[ -z "$file" ]] && continue
