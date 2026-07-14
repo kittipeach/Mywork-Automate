@@ -1,0 +1,91 @@
+{{- if .Values.temporal.enabled -}}
+# =============================================================================
+# DEV-ONLY in-cluster Temporal dev server (temporalio/temporal server start-dev).
+# NOT FOR PRODUCTION. sit/uat/prod set temporal.enabled=false and point
+# app.temporalHostPort at a shared/managed Temporal — see docs/spec/04 §4.
+# start-dev bundles an in-memory/SQLite Temporal + Web UI; no external DB needed.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "automate.temporal.fullname" . }}
+  labels:
+    {{- include "automate.componentLabels" (dict "root" . "component" "temporal") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "automate.componentSelectorLabels" (dict "root" . "component" "temporal") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "automate.componentLabels" (dict "root" . "component" "temporal") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: temporal
+          image: {{ .Values.temporal.image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - server
+            - start-dev
+            - --ip
+            - 0.0.0.0
+            - --namespace
+            - {{ .Values.temporal.namespace | quote }}
+          ports:
+            - name: grpc
+              containerPort: 7233
+              protocol: TCP
+            - name: ui
+              containerPort: 8233
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.temporal.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "automate.temporal.fullname" . }}
+  labels:
+    {{- include "automate.componentLabels" (dict "root" . "component" "temporal") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: {{ .Values.temporal.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+    - name: ui
+      port: {{ .Values.temporal.service.uiPort }}
+      targetPort: ui
+      protocol: TCP
+  selector:
+    {{- include "automate.componentSelectorLabels" (dict "root" . "component" "temporal") | nindent 4 }}
+{{- end }}

@@ -1,0 +1,39 @@
+# UAT overrides.
+# Local auth is OFF (docs/spec/07 §1.2). Postgres/Temporal are external.
+
+app:
+  env: uat
+  fileStore: azureblob
+  authLocalEnabled: "false"
+  databaseUrl: "postgres://REPLACE_ME@automate-uat.postgres.database.azure.com:5432/automate?sslmode=require"
+  temporalHostPort: "temporal-uat.internal:7233"
+
+api:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+worker:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: true
+  className: nginx
+  host: automate-uat.mywork.internal
+
+networkPolicy:
+  enabled: true
+
+postgres:
+  enabled: false
+
+temporal:
+  enabled: false

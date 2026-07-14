@@ -1,0 +1,36 @@
+{{- if .Values.networkPolicy.enabled -}}
+# NetworkPolicy for the API (docs/spec/04 §4, docs/spec/07 §3).
+# Ingress to the API is allowed only from the ingress-nginx controller namespace
+# and from within this namespace; egress defaults are left permissive here for
+# the kind demo (worker default-deny egress + destination allowlist is refined
+# in E1-S5/E7 once Key Vault / target-DB endpoints are known).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "automate.api.fullname" . }}
+  labels:
+    {{- include "automate.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "automate.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # From the ingress-nginx controller.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+    # From other pods in this release (e.g. web/worker calling the API).
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "automate.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+{{- end }}

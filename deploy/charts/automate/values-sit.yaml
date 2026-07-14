@@ -1,0 +1,45 @@
+# SIT overrides.
+# Local auth is OFF (docs/spec/07 §1.2 — enforced by scripts/policy-check-local-auth.sh
+# and internal/config runtime guard). Postgres/Temporal are external (managed/shared).
+# DATABASE_URL / TEMPORAL_HOSTPORT MUST be supplied here or via a secret/values overlay.
+
+app:
+  env: sit
+  fileStore: azureblob
+  authLocalEnabled: "false"
+  # Point at managed PostgreSQL (Azure Flexible Server) and the shared Temporal.
+  # Replace the placeholders below at deploy time (do NOT commit real secrets;
+  # secrets belong in Key Vault — see docs/spec/04 §2.6 / E1-S5).
+  databaseUrl: "postgres://REPLACE_ME@automate-sit.postgres.database.azure.com:5432/automate?sslmode=require"
+  temporalHostPort: "temporal-sit.internal:7233"
+
+api:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+worker:
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: true
+  className: nginx
+  host: automate-sit.mywork.internal
+
+networkPolicy:
+  enabled: true
+
+# External dependencies — in-cluster dev stacks disabled.
+postgres:
+  enabled: false
+
+temporal:
+  enabled: false

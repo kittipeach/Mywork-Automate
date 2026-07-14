@@ -1,0 +1,44 @@
+# Dev overrides — self-contained kind demo (context docker-desktop, cluster desktop).
+# In-cluster Postgres + Temporal are enabled; local auth is ON (dev only).
+# DATABASE_URL / TEMPORAL_HOSTPORT are derived from the in-cluster services by
+# the templates (see _helpers.tpl) — shown here for documentation.
+
+app:
+  env: dev
+  fileStore: local
+  # AUTH_LOCAL_ENABLED true is permitted ONLY in dev (docs/spec/07 §1.2).
+  authLocalEnabled: "true"
+  # Left empty on purpose: helpers derive these from the release-scoped
+  # <release>-postgres and <release>-temporal services when the deps are enabled.
+  # Effective values (release name "automate"):
+  #   DATABASE_URL      = postgres://automate:automate@automate-postgres:5432/automate?sslmode=disable
+  #   TEMPORAL_HOSTPORT = automate-temporal:7233
+  databaseUrl: ""
+  temporalHostPort: ""
+
+api:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+
+worker:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+
+ingress:
+  enabled: true
+  className: nginx
+  host: automate.local
+  path: /
+  pathType: Prefix
+
+networkPolicy:
+  enabled: false
+
+# DEV-ONLY dependencies — NOT FOR PRODUCTION.
+postgres:
+  enabled: true
+
+temporal:
+  enabled: true
