@@ -1,0 +1,27 @@
+# Go
+/coverage.out
+/coverage.filtered.out
+*.test
+/bin/
+
+# Node / Next.js
+node_modules/
+apps/automate-web/.next/
+apps/automate-web/coverage/
+apps/automate-web/out/
+tests/e2e/node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+
+# perf artifacts
+tests/perf/summary-*.json
+
+# secrets — never commit (docs/spec/04 §2.6)
+secrets.local.yaml
+*.local.env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store

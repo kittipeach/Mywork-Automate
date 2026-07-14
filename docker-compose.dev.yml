@@ -1,0 +1,54 @@
+# Local dev stack for MyWork Automate (E1-S1). `make dev` brings this up.
+# Nothing here is production config — see deploy/charts/automate for that.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: automate
+      POSTGRES_PASSWORD: automate
+      POSTGRES_DB: automate
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U automate"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: temporalio/temporal:latest
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--namespace", "automate"]
+    ports:
+      - "7233:7233" # gRPC frontend
+      - "8233:8233" # Temporal Web UI
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "namespace", "describe", "--namespace", "automate"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--tableHost", "0.0.0.0"]
+    ports:
+      - "10000:10000" # blob
+      - "10001:10001" # queue
+      - "10002:10002" # table
+
+  sftp-mock:
+    image: atmoz/sftp:latest
+    # user: automate / pass: automate / upload dir mounted for MFT tests (E8-S1)
+    command: ["automate:automate:::upload"]
+    ports:
+      - "2222:22"
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # web UI
+
+volumes:
+  pgdata:

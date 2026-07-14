@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v1.64.5
+
+      - name: Install web deps
+        working-directory: apps/automate-web
+        run: pnpm install --frozen-lockfile
+
+      # ---- quality pipeline (07-security-testing.md §5.1) ----
+      - run: make lint
+      - run: make test
+      - run: make coverage-gate            # fail build ถ้า coverage ตก
+      - run: make test-int
+      - run: gitleaks detect --no-banner
+      - run: trivy fs --exit-code 1 --severity HIGH,CRITICAL .
+      - run: bash scripts/policy-check-local-auth.sh   # AUTH_LOCAL_ENABLED=false บน sit/uat/prod
+
+      # - run: sonar-scanner               # quality gate ผูกกับ coverage.out + lcov (needs SONAR_TOKEN)
