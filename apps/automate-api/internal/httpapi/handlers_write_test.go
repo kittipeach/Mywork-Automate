@@ -141,7 +141,7 @@ func (r *fakeRunner) Run(_ context.Context, _ string, _ flowspec.FlowInput, onDo
 }
 
 func routerWithRunner(st store.Store, run runner.Runner) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, AuthConfig{})
 }
 
 // --- tests ---

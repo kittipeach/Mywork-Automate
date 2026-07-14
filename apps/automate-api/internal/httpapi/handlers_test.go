@@ -162,7 +162,7 @@ func intersects(a, b []string) bool {
 }
 
 func newTestRouter(st store.Store) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil, AuthConfig{})
 }
 
 // doReq performs a request with optional headers and returns the recorder plus
@@ -403,15 +403,19 @@ func TestGetExecution_StoreError(t *testing.T) {
 
 func TestListConnections_RBAC(t *testing.T) {
 	tests := []struct {
-		name    string
-		role    string // "" means no header (defaults to admin)
-		wantIDs []string
+		name       string
+		role       string // "" means no header (defaults to admin)
+		wantStatus int
+		wantIDs    []string // only checked when wantStatus == 200
 	}{
-		{"no header defaults to admin sees all", "", []string{"conn_hr", "conn_pay", "conn_bankmft", "conn_smtp"}},
-		{"admin sees all", "admin", []string{"conn_hr", "conn_pay", "conn_bankmft", "conn_smtp"}},
-		{"designer excludes payroll-only", "designer", []string{"conn_hr", "conn_bankmft", "conn_smtp"}},
-		{"operator sees only smtp", "operator", []string{"conn_smtp"}},
-		{"unknown role sees none", "auditor", []string{}},
+		// Roles with FlowView pass the RBAC gate, then the store filters by role.
+		{"no header defaults to admin sees all", "", http.StatusOK, []string{"conn_hr", "conn_pay", "conn_bankmft", "conn_smtp"}},
+		{"admin sees all", "admin", http.StatusOK, []string{"conn_hr", "conn_pay", "conn_bankmft", "conn_smtp"}},
+		{"designer excludes payroll-only", "designer", http.StatusOK, []string{"conn_hr", "conn_bankmft", "conn_smtp"}},
+		{"operator sees only smtp", "operator", http.StatusOK, []string{"conn_smtp"}},
+		{"viewer has FlowView but no allowed connections", "viewer", http.StatusOK, []string{}},
+		// An unknown role lacks FlowView → denied at the RBAC gate (deny-by-default).
+		{"unknown role forbidden", "auditor", http.StatusForbidden, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -421,8 +425,12 @@ func TestListConnections_RBAC(t *testing.T) {
 				headers[roleHeader] = tt.role
 			}
 			w, body := doReq(t, r, http.MethodGet, APIBasePath+"/connections", headers)
-			if w.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200", w.Code)
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tt.wantStatus)
+			}
+			if tt.wantStatus != http.StatusOK {
+				assertErrorEnvelope(t, body, "forbidden")
+				return
 			}
 			conns, _ := body["connections"].([]any)
 			var gotIDs []string

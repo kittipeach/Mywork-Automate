@@ -91,12 +91,10 @@ func (h *handlers) getExecution(c *gin.Context) {
 	c.JSON(http.StatusOK, exec)
 }
 
-// listConnections → GET /connections, RBAC-filtered by the caller's X-Role.
+// listConnections → GET /connections, RBAC-filtered by the caller's resolved
+// role (JWT → X-Role → defaultRole; see resolveRole).
 func (h *handlers) listConnections(c *gin.Context) {
-	role := c.GetHeader(roleHeader)
-	if role == "" {
-		role = defaultRole
-	}
+	role := string(callerRole(c))
 	conns, err := h.store.ListConnections(c.Request.Context(), []string{role})
 	if err != nil {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())

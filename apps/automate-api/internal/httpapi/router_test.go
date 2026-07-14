@@ -31,7 +31,7 @@ func doGET(t *testing.T, r http.Handler, path string) (*httptest.ResponseRecorde
 }
 
 func TestRouter_Healthz(t *testing.T) {
-	r := NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, seedFake(), nil)
+	r := NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, seedFake(), nil, AuthConfig{})
 	w, body := doGET(t, r, "/healthz")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -42,7 +42,7 @@ func TestRouter_Healthz(t *testing.T) {
 }
 
 func TestRouter_Readyz(t *testing.T) {
-	r := NewRouter(config.Config{Env: config.EnvSIT, FileStore: config.FileStoreLocal}, seedFake(), nil)
+	r := NewRouter(config.Config{Env: config.EnvSIT, FileStore: config.FileStoreLocal}, seedFake(), nil, AuthConfig{})
 	w, body := doGET(t, r, "/readyz")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -76,7 +76,7 @@ func TestRouter_AuthConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := NewRouter(tt.cfg, seedFake(), nil)
+			r := NewRouter(tt.cfg, seedFake(), nil, AuthConfig{})
 			w, body := doGET(t, r, APIBasePath+"/auth/config")
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200", w.Code)

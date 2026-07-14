@@ -67,10 +67,7 @@ func (h *handlers) runFlow(c *gin.Context) {
 		return
 	}
 
-	role := c.GetHeader(roleHeader)
-	if role == "" {
-		role = defaultRole
-	}
+	role := string(callerRole(c))
 
 	startedAt := time.Now()
 	execID := newExecID()

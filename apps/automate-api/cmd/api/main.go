@@ -14,12 +14,44 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	temporalclient "go.temporal.io/sdk/client"
 
+	"github.com/mywork/automate/apps/automate-api/internal/auth"
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/store/postgres"
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/internal/flowspec"
 )
+
+// devJWTSecret is used only when AUTH_LOCAL_ENABLED=true and AUTH_JWT_SECRET is
+// unset — i.e. local dev. The config guard already prevents local auth from
+// running in protected environments, so this default can never apply there.
+const devJWTSecret = "dev-only-insecure-jwt-secret-change-me"
+
+// buildAuthConfig wires the local-auth service when local auth is enabled and
+// permitted. When disabled it returns a zero AuthConfig; the RBAC middleware
+// then falls back to the X-Role header / defaultRole.
+func buildAuthConfig(cfg config.Config, logger *slog.Logger) (httpapi.AuthConfig, error) {
+	if !cfg.AuthLocalEnabled || cfg.IsProtectedEnv() {
+		return httpapi.AuthConfig{Logger: logger}, nil
+	}
+
+	secret := os.Getenv("AUTH_JWT_SECRET")
+	if secret == "" {
+		secret = devJWTSecret
+		logger.Warn("AUTH_JWT_SECRET unset; using insecure dev default (local auth only)")
+	}
+	tokens, err := auth.NewTokenIssuer(secret)
+	if err != nil {
+		return httpapi.AuthConfig{}, err
+	}
+	users, err := auth.SeedDevAdmin()
+	if err != nil {
+		return httpapi.AuthConfig{}, err
+	}
+	svc := auth.NewService(users, tokens, auth.NewLockoutTracker(nil))
+	logger.Info("local auth enabled", "devAdmin", auth.DevAdminEmail)
+	return httpapi.AuthConfig{Service: svc, Logger: logger}, nil
+}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -78,9 +110,15 @@ func main() {
 		logger.Info("temporal client connected", "hostport", cfg.TemporalHostPort, "namespace", flowspec.Namespace)
 	}
 
+	authCfg, err := buildAuthConfig(cfg, logger)
+	if err != nil {
+		logger.Error("auth config failed", "err", err)
+		os.Exit(1)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg, st, run),
+		Handler:           httpapi.NewRouter(cfg, st, run, authCfg),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
