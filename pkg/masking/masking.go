@@ -69,7 +69,7 @@ const (
 type Rule struct {
 	Name        string
 	MatchType   MatchType
-	Pattern     string   // regex matched against the column/field name
+	Pattern     string // regex matched against the column/field name
 	Style       Style
 	ExemptRoles []string // role codes that see cleartext
 	AppliesTo   []Point  // points where this rule is enforced

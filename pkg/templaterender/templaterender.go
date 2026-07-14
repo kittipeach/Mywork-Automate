@@ -8,7 +8,7 @@
 // header/trailer records (`H{{ $node["Q"].meta.rowCount }}`, `T{{ $node["Q"].items | sum:"amount" }}`)
 // and any static+expression row in a template.
 //
-// Escaping rule
+// # Escaping rule
 //
 // A backslash (`\`) is the escape character:
 //   - `\{` renders a literal `{`

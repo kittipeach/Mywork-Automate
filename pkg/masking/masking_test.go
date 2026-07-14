@@ -101,10 +101,10 @@ func TestMaskItems_Styles(t *testing.T) {
 	wantHash := hex.EncodeToString(sum[:])
 
 	tests := []struct {
-		name  string
-		key   string
-		val   any
-		want  any
+		name string
+		key  string
+		val  any
+		want any
 	}{
 		{"full string", "full", "1234567890", maskToken},
 		{"full number", "full", 987654, maskToken},
@@ -206,9 +206,9 @@ func TestMaskItems_PartialNumericFormatting(t *testing.T) {
 		val  any
 		want string
 	}{
-		{int64(1234567), "***4567"},         // "1234567" -> keep "4567", star 3
-		{float64(50000), "*0000"},           // "50000" -> keep "0000", star "5"
-		{uint(9876), "****"},                // exactly 4 chars -> fully masked (safe degrade)
+		{int64(1234567), "***4567"}, // "1234567" -> keep "4567", star 3
+		{float64(50000), "*0000"},   // "50000" -> keep "0000", star "5"
+		{uint(9876), "****"},        // exactly 4 chars -> fully masked (safe degrade)
 	}
 	for _, tc := range tests {
 		got := maskOne(t, e, "n", tc.val, PointPreview, nil)
