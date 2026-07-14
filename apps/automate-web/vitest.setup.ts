@@ -6,5 +6,5 @@ class ResizeObserverStub {
   unobserve() {}
   disconnect() {}
 }
-// @ts-expect-error jsdom global
-global.ResizeObserver = global.ResizeObserver ?? ResizeObserverStub;
+const g = globalThis as unknown as { ResizeObserver?: unknown };
+g.ResizeObserver ??= ResizeObserverStub;

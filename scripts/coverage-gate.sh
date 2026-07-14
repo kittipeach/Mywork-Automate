@@ -29,11 +29,12 @@ if [[ ! -f coverage.out ]]; then
 fi
 
 # Excluded from the UNIT-coverage gate (validated by integration/e2e instead):
-#   /cmd/         — thin main-package wiring (server start, signal handling)
-#   /pgxquerier/  — real-Postgres adapter, covered by the `integration`-tagged test
+#   /cmd/            — thin main-package wiring (server start, signal handling)
+#   /pgxquerier/     — real-Postgres adapter, covered by the `integration` test
+#   /store/postgres/ — real-Postgres control-plane store, `integration`-tested
 # Build a filtered profile that keeps the mode header.
 FILTERED=coverage.filtered.out
-grep -vE '/cmd/|/pgxquerier/' coverage.out > "$FILTERED"
+grep -vE '/cmd/|/pgxquerier/|/store/postgres/' coverage.out > "$FILTERED"
 
 while read -r file pct; do
   [[ -z "$file" ]] && continue

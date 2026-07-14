@@ -11,7 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
+	"github.com/mywork/automate/apps/automate-api/internal/store/postgres"
 	"github.com/mywork/automate/internal/config"
 )
 
@@ -24,9 +27,40 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cfg.DatabaseURL == "" {
+		logger.Error("DATABASE_URL is required (postgres connection string)")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("database connect failed", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	pingCtx, cancelPing := context.WithTimeout(ctx, 10*time.Second)
+	defer cancelPing()
+	if err := pool.Ping(pingCtx); err != nil {
+		logger.Error("database unreachable", "err", err)
+		os.Exit(1)
+	}
+
+	if err := postgres.Migrate(ctx, pool); err != nil {
+		logger.Error("migrations failed", "err", err)
+		os.Exit(1)
+	}
+	if err := postgres.Seed(ctx, pool); err != nil {
+		logger.Error("seed failed", "err", err)
+		os.Exit(1)
+	}
+
+	st := postgres.New(pool)
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg),
+		Handler:           httpapi.NewRouter(cfg, st),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -38,9 +72,9 @@ func main() {
 		}
 	}()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	shutdownSig, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	<-ctx.Done()
+	<-shutdownSig.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

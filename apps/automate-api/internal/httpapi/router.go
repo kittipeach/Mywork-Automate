@@ -11,16 +11,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
 )
 
 // APIBasePath is the versioned control-plane prefix (docs/spec/06 §2).
 const APIBasePath = "/api/automate/v1"
 
-// NewRouter builds the Gin engine for the given config.
-func NewRouter(cfg config.Config) *gin.Engine {
+// NewRouter builds the Gin engine for the given config and data store. The
+// store backs the read endpoints (/flows, /executions, /connections); /nodes is
+// served from the static Go registry independent of the store.
+func NewRouter(cfg config.Config, st store.Store) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(corsMiddleware())
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -28,6 +32,8 @@ func NewRouter(cfg config.Config) *gin.Engine {
 	r.GET("/readyz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "env": cfg.Env})
 	})
+
+	h := &handlers{store: st}
 
 	v1 := r.Group(APIBasePath)
 	// GET /auth/config — frontend uses this to decide whether to render the
@@ -40,6 +46,13 @@ func NewRouter(cfg config.Config) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"providers": providers})
 	})
+
+	v1.GET("/nodes", h.listNodes)
+	v1.GET("/flows", h.listFlows)
+	v1.GET("/flows/:id", h.getFlow)
+	v1.GET("/executions", h.listExecutions)
+	v1.GET("/executions/:id", h.getExecution)
+	v1.GET("/connections", h.listConnections)
 
 	return r
 }
