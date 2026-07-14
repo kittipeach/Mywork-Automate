@@ -196,15 +196,37 @@ func TestExecute_ExemptRoleSeesCleartext(t *testing.T) {
 	}
 }
 
-func TestExecute_NilMaskingPassthrough(t *testing.T) {
+func TestExecute_NilMaskingFailsClosed(t *testing.T) {
+	// Banking-grade: refuse to return external-DB rows without a masking engine.
 	q := &fakeQuerier{rs: RowSet{Columns: []string{"salary"}, Rows: [][]any{{50000}}}}
-	deps := Deps{Secrets: &fakeResolver{}, Querier: q} // Masking nil
+	r := &fakeResolver{val: "pw"}
+	deps := Deps{Secrets: r, Querier: q} // Masking nil
+	_, err := Execute(context.Background(), Input{SQL: "SELECT salary FROM t", ConnSecret: "c"}, deps)
+	if !errors.Is(err, ErrMaskingRequired) {
+		t.Fatalf("err = %v, want ErrMaskingRequired", err)
+	}
+	if q.called {
+		t.Fatal("query ran without a masking engine — must fail closed before the DB")
+	}
+	if r.called {
+		t.Fatal("credential resolved before the masking-engine check")
+	}
+}
+
+// An explicitly empty engine is the sanctioned way to apply no masking rules.
+func TestExecute_EmptyEngineIsAllowedOptOut(t *testing.T) {
+	empty, err := masking.NewEngine(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &fakeQuerier{rs: RowSet{Columns: []string{"salary"}, Rows: [][]any{{50000}}}}
+	deps := Deps{Secrets: &fakeResolver{}, Querier: q, Masking: empty, MaskPoint: masking.PointPreview}
 	out, err := Execute(context.Background(), Input{SQL: "SELECT salary FROM t"}, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.Items[0]["salary"] != 50000 {
-		t.Errorf("nil masking should pass values through, got %v", out.Items[0]["salary"])
+		t.Errorf("empty engine should apply no rules, got %v", out.Items[0]["salary"])
 	}
 }
 

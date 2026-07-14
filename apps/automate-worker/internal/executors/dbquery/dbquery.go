@@ -15,12 +15,19 @@ package dbquery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mywork/automate/pkg/masking"
 	"github.com/mywork/automate/pkg/secrets"
 	"github.com/mywork/automate/pkg/sqlguard"
 )
+
+// ErrMaskingRequired is returned when Execute is called without a masking
+// engine. The executor fails closed: external-DB rows are never returned
+// without an explicit masking decision. To intentionally apply no rules, pass
+// an empty engine (masking.NewEngine(nil)).
+var ErrMaskingRequired = errors.New("dbquery: masking engine is required")
 
 // defaultMaxRows caps a query when neither the request nor Deps specify a limit.
 const defaultMaxRows = 50
@@ -77,6 +84,10 @@ func Execute(ctx context.Context, in Input, deps Deps) (Output, error) {
 	if err := sqlguard.Validate(in.SQL); err != nil {
 		return Output{}, fmt.Errorf("dbquery: rejected sql: %w", err)
 	}
+	// Fail closed: never query external data without an explicit masking decision.
+	if deps.Masking == nil {
+		return Output{}, ErrMaskingRequired
+	}
 	// 2. Resolve the connection credential via the secret resolver only.
 	if in.ConnSecret != "" {
 		if _, err := deps.Secrets.Resolve(ctx, in.ConnSecret); err != nil {
@@ -98,10 +109,8 @@ func Execute(ctx context.Context, in Input, deps Deps) (Output, error) {
 	}
 	// 5. Shape rows into items[].
 	items := toItems(rs.Columns, rows)
-	// 6. Mask before the data leaves this package.
-	if deps.Masking != nil {
-		items = deps.Masking.MaskItems(items, deps.MaskPoint, in.ViewerRoles)
-	}
+	// 6. Mask before the data leaves this package (engine guaranteed non-nil above).
+	items = deps.Masking.MaskItems(items, deps.MaskPoint, in.ViewerRoles)
 	return Output{
 		Items: items,
 		Meta:  Meta{RowCount: len(items), Truncated: truncated, Columns: rs.Columns},
