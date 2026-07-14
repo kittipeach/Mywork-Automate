@@ -21,7 +21,12 @@ func main() {
 	b := worker.NewBootstrap(cfg)
 	logger.Info("automate-worker bootstrap", "summary", b.String())
 
-	// E1-S7: connect Temporal client, register interpreter workflow + activity
-	// dispatcher on b.TaskQueue, then block on worker.Run(). Until then the
-	// bootstrap summary is emitted so the container has a valid entrypoint.
+	// E1-S7: dial Temporal, register the interpreter workflow + activity
+	// dispatcher on the task queue, and block until interrupted. Run wraps every
+	// failure (including Temporal being unavailable) with context; log and exit
+	// non-zero rather than panicking so the container restarts cleanly.
+	if err := worker.Run(cfg); err != nil {
+		logger.Error("worker run failed", "err", err)
+		os.Exit(1)
+	}
 }
