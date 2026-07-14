@@ -7,9 +7,9 @@ import type { FlowSummary, Execution, Connection } from '@/lib/mock/store';
 // Points at the real Go control-plane API. NEXT_PUBLIC_API_BASE is set at build
 // time (e.g. http://127.0.0.1:8090/api/automate/v1 in dev, the Kong gateway in
 // prod). Falls back to the same-origin path for pure-frontend/mock dev.
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api/automate/v1';
+export const BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api/automate/v1';
 
-async function getJSON<T>(path: string): Promise<T> {
+export async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
   return res.json() as Promise<T>;
@@ -47,5 +47,14 @@ export function useConnections() {
   return useQuery({
     queryKey: ['connections'],
     queryFn: () => getJSON<{ connections: Connection[] }>('/connections'),
+  });
+}
+
+/** Single execution with its per-step drill-down. Disabled until an id is given. */
+export function useExecution(id: string) {
+  return useQuery({
+    queryKey: ['execution', id],
+    queryFn: () => getJSON<Execution>(`/executions/${id}`),
+    enabled: !!id,
   });
 }

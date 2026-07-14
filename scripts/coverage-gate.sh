@@ -32,9 +32,10 @@ fi
 #   /cmd/            — thin main-package wiring (server start, signal handling)
 #   /pgxquerier/     — real-Postgres adapter, covered by the `integration` test
 #   /store/postgres/ — real-Postgres control-plane store, `integration`-tested
+#   /runner/         — Temporal-client run adapter, exercised at runtime
 # Build a filtered profile that keeps the mode header.
 FILTERED=coverage.filtered.out
-grep -vE '/cmd/|/pgxquerier/|/store/postgres/' coverage.out > "$FILTERED"
+grep -vE '/cmd/|/pgxquerier/|/store/postgres/|/runner/' coverage.out > "$FILTERED"
 
 while read -r file pct; do
   [[ -z "$file" ]] && continue

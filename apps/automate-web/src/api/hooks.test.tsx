@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useNodes, useFlows, useExecutions, useConnections } from './hooks';
+import { useNodes, useFlows, useExecutions, useConnections, useExecution } from './hooks';
 
 function wrapper() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -15,8 +15,7 @@ const fetchMock = vi.fn();
 
 beforeEach(() => {
   fetchMock.mockReset();
-  // @ts-expect-error test global
-  global.fetch = fetchMock;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
 });
 
 function ok(body: unknown) {
@@ -66,5 +65,19 @@ describe('api hooks', () => {
     fetchMock.mockReturnValueOnce(Promise.resolve({ ok: false, status: 500 } as Response));
     const { result } = renderHook(() => useConnections(), { wrapper: wrapper() });
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  it('useExecution fetches /executions/{id}', async () => {
+    fetchMock.mockReturnValueOnce(ok({ id: 'exe_1', steps: [] }));
+    const { result } = renderHook(() => useExecution('exe_1'), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledWith('/api/automate/v1/executions/exe_1');
+  });
+
+  it('useExecution is disabled with no id (no fetch)', async () => {
+    const { result } = renderHook(() => useExecution(''), { wrapper: wrapper() });
+    // enabled:false → stays in pending/idle, never fetches
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -2,14 +2,19 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mywork/automate/apps/automate-api/internal/store"
+	"github.com/mywork/automate/internal/flowspec"
 )
 
 // Store is the pgx-backed implementation of store.Store. All queries are
@@ -225,4 +230,216 @@ func (s *Store) ListConnections(ctx context.Context, roles []string) ([]store.Co
 		return nil, fmt.Errorf("postgres: list connections rows: %w", err)
 	}
 	return out, nil
+}
+
+// newID returns a short random id with the given prefix (e.g. "exe_1a2b...").
+// crypto/rand is used so ids are unguessable; 8 bytes is plenty for uniqueness
+// at control-plane volumes.
+func newID(prefix string) string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return prefix + hex.EncodeToString(b[:])
+}
+
+// nowISO renders the current instant as a millisecond ISO-8601 string, matching
+// the text timestamps used throughout the read model.
+func nowISO() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00")
+}
+
+// GetFlowDefinition returns the flow's runnable graph. It maps both an unknown
+// flow and a NULL definition to store.NewNotFound so the handler 404s uniformly.
+func (s *Store) GetFlowDefinition(ctx context.Context, id string) (flowspec.FlowDef, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT definition FROM flows WHERE id = $1`, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return flowspec.FlowDef{}, store.NewNotFound("flow not found: " + id)
+	}
+	if err != nil {
+		return flowspec.FlowDef{}, fmt.Errorf("postgres: get flow definition: %w", err)
+	}
+	if len(raw) == 0 {
+		return flowspec.FlowDef{}, store.NewNotFound("flow has no definition: " + id)
+	}
+	var def flowspec.FlowDef
+	if err := json.Unmarshal(raw, &def); err != nil {
+		return flowspec.FlowDef{}, fmt.Errorf("postgres: unmarshal flow definition: %w", err)
+	}
+	return def, nil
+}
+
+// CreateExecution inserts a new execution row. Steps are inserted later by
+// FinishExecution once the workflow completes.
+func (s *Store) CreateExecution(ctx context.Context, e store.Execution) error {
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO executions (id, flow_id, flow_name, status, trigger_type, started_at, duration_ms, version)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		e.ID, e.FlowID, e.FlowName, e.Status, e.Trigger, e.StartedAt, e.DurationMs, e.Version); err != nil {
+		return fmt.Errorf("postgres: create execution: %w", err)
+	}
+	return nil
+}
+
+// FinishExecution updates the execution's terminal status+duration and inserts
+// its ordered steps in a single transaction. It also mirrors the outcome onto
+// the parent flow's last_run_status/last_run_at so the /flows list reflects it.
+func (s *Store) FinishExecution(ctx context.Context, id, status string, durationMs int64, steps []store.ExecutionStep) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: finish execution begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort rollback on early return
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE executions SET status = $2, duration_ms = $3 WHERE id = $1`,
+		id, status, durationMs)
+	if err != nil {
+		return fmt.Errorf("postgres: finish execution update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("execution not found: " + id)
+	}
+
+	for seq, st := range steps {
+		var errMsg *string
+		if st.Error != nil && *st.Error != "" {
+			errMsg = st.Error
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO execution_steps
+			 (execution_id, seq, node_id, node_name, node_type, status, duration_ms, input_count, output_count, error_message)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			id, seq, st.NodeID, st.NodeName, st.NodeType, st.Status,
+			st.DurationMs, st.InputCount, st.OutputCount, errMsg); err != nil {
+			return fmt.Errorf("postgres: finish execution insert step %d: %w", seq, err)
+		}
+	}
+
+	// Reflect the run outcome on the parent flow (best-effort; ignore no-op).
+	if _, err := tx.Exec(ctx,
+		`UPDATE flows SET last_run_status = $2, last_run_at = $3
+		 WHERE id = (SELECT flow_id FROM executions WHERE id = $1)`,
+		id, status, nowISO()); err != nil {
+		return fmt.Errorf("postgres: finish execution update flow: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: finish execution commit: %w", err)
+	}
+	return nil
+}
+
+// CreateFlow inserts a new draft flow (version 0, no definition) and returns it.
+func (s *Store) CreateFlow(ctx context.Context, name, folder string) (store.FlowSummary, error) {
+	f := store.FlowSummary{
+		ID:        newID("flw_"),
+		Name:      name,
+		Folder:    folder,
+		Status:    "draft",
+		Version:   0,
+		UpdatedAt: nowISO(),
+	}
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO flows (id, name, folder, status, current_version, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		f.ID, f.Name, f.Folder, f.Status, f.Version, f.UpdatedAt); err != nil {
+		return store.FlowSummary{}, fmt.Errorf("postgres: create flow: %w", err)
+	}
+	return f, nil
+}
+
+// UpdateFlowDefinition saves the draft graph on an existing flow and touches
+// updated_at. ErrNotFound when the flow is unknown.
+func (s *Store) UpdateFlowDefinition(ctx context.Context, id string, def flowspec.FlowDef) error {
+	raw, err := json.Marshal(def)
+	if err != nil {
+		return fmt.Errorf("postgres: marshal flow definition: %w", err)
+	}
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE flows SET definition = $2, updated_at = $3 WHERE id = $1`,
+		id, raw, nowISO())
+	if err != nil {
+		return fmt.Errorf("postgres: update flow definition: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	return nil
+}
+
+// PublishFlow bumps current_version and sets status="published", returning the
+// updated summary. ErrNotFound when the flow is unknown.
+func (s *Store) PublishFlow(ctx context.Context, id string) (store.FlowSummary, error) {
+	f, err := scanFlow(s.pool.QueryRow(ctx,
+		`UPDATE flows SET status = 'published', current_version = current_version + 1, updated_at = $2
+		 WHERE id = $1
+		 RETURNING id, name, folder, status, updated_at, last_run_status, last_run_at, current_version`,
+		id, nowISO()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.FlowSummary{}, store.NewNotFound("flow not found: " + id)
+	}
+	if err != nil {
+		return store.FlowSummary{}, fmt.Errorf("postgres: publish flow: %w", err)
+	}
+	return f, nil
+}
+
+// CreateConnection inserts a new connection (status "untested") and returns it.
+func (s *Store) CreateConnection(ctx context.Context, in store.ConnectionInput) (store.Connection, error) {
+	c := store.Connection{
+		ID:           newID("conn_"),
+		Name:         in.Name,
+		Type:         in.Type,
+		Host:         in.Host,
+		Status:       "untested",
+		AllowedRoles: in.AllowedRoles,
+	}
+	if c.AllowedRoles == nil {
+		c.AllowedRoles = []string{}
+	}
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO connections (id, name, type, host, status, allowed_roles)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		c.ID, c.Name, c.Type, c.Host, c.Status, c.AllowedRoles); err != nil {
+		return store.Connection{}, fmt.Errorf("postgres: create connection: %w", err)
+	}
+	return c, nil
+}
+
+// UpdateConnection replaces a connection's mutable fields and returns the row.
+// ErrNotFound when the id is unknown.
+func (s *Store) UpdateConnection(ctx context.Context, id string, in store.ConnectionInput) (store.Connection, error) {
+	roles := in.AllowedRoles
+	if roles == nil {
+		roles = []string{}
+	}
+	var c store.Connection
+	err := s.pool.QueryRow(ctx,
+		`UPDATE connections SET name = $2, type = $3, host = $4, allowed_roles = $5
+		 WHERE id = $1
+		 RETURNING id, name, type, host, status, allowed_roles`,
+		id, in.Name, in.Type, in.Host, roles).
+		Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Status, &c.AllowedRoles)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Connection{}, store.NewNotFound("connection not found: " + id)
+	}
+	if err != nil {
+		return store.Connection{}, fmt.Errorf("postgres: update connection: %w", err)
+	}
+	if c.AllowedRoles == nil {
+		c.AllowedRoles = []string{}
+	}
+	return c, nil
+}
+
+// DeleteConnection removes a connection. ErrNotFound when the id is unknown.
+func (s *Store) DeleteConnection(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM connections WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("postgres: delete connection: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("connection not found: " + id)
+	}
+	return nil
 }

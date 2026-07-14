@@ -11,6 +11,7 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
+	"github.com/mywork/automate/internal/flowspec"
 )
 
 // fakeStore is an in-memory store.Store for handler tests. It applies the same
@@ -26,6 +27,21 @@ type fakeStore struct {
 	errExecs   error
 	errGetExec error
 	errConns   error
+
+	// write-path state/hooks
+	def        flowspec.FlowDef
+	defMissing bool
+	errDef     error // non-notfound error from GetFlowDefinition
+	created    []store.Execution
+	finished   []finishCall
+	errWrite   error // non-notfound error from any write method
+}
+
+type finishCall struct {
+	id         string
+	status     string
+	durationMs int64
+	steps      []store.ExecutionStep
 }
 
 func sp(s string) *string { return &s }
@@ -146,7 +162,7 @@ func intersects(a, b []string) bool {
 }
 
 func newTestRouter(st store.Store) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil)
 }
 
 // doReq performs a request with optional headers and returns the recorder plus

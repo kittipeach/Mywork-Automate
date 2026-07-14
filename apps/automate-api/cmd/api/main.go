@@ -12,10 +12,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	temporalclient "go.temporal.io/sdk/client"
 
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
+	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/store/postgres"
 	"github.com/mywork/automate/internal/config"
+	"github.com/mywork/automate/internal/flowspec"
 )
 
 func main() {
@@ -58,9 +61,26 @@ func main() {
 
 	st := postgres.New(pool)
 
+	// Temporal is optional at startup: the read endpoints work without it, and
+	// POST /flows/{id}/run degrades to 503 until it is reachable. Dial once; on
+	// failure log a WARN and pass a nil Runner so the server still starts.
+	var run runner.Runner
+	tc, err := temporalclient.Dial(temporalclient.Options{
+		HostPort:  cfg.TemporalHostPort,
+		Namespace: flowspec.Namespace,
+	})
+	if err != nil {
+		logger.Warn("temporal unavailable; POST /flows/{id}/run will return 503",
+			"hostport", cfg.TemporalHostPort, "err", err)
+	} else {
+		defer tc.Close()
+		run = runner.New(tc)
+		logger.Info("temporal client connected", "hostport", cfg.TemporalHostPort, "namespace", flowspec.Namespace)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg, st),
+		Handler:           httpapi.NewRouter(cfg, st, run),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

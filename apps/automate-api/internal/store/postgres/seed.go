@@ -7,6 +7,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// runnableDef is the canonical RUNNABLE FlowDef JSON seeded onto the two
+// published flows. It mirrors the runflow demo graph:
+// trigger.manual(t1) -> db.query(q1) -> logic.if(if1, rowCount>0) --true--> noop(done).
+// q1 selects the employee columns (name/salary/citizen_id/phone/email capped at
+// 50 rows) and if1 branches on rowCount>0. It is stored verbatim as JSONB so the
+// interpreter unmarshals it into interpreter.FlowDef unchanged.
+const runnableDef = `{` +
+	`"nodes":[` +
+	`{"id":"t1","type":"trigger.manual","name":"Manual trigger","config":null},` +
+	`{"id":"q1","type":"db.query","name":"Query employees","config":{"sql":"SELECT name, salary, citizen_id, phone, email FROM employees ORDER BY id","maxRows":50}},` +
+	`{"id":"if1","type":"logic.if","name":"Has rows?","config":{"left":"rowCount","op":">","right":0}},` +
+	`{"id":"done","type":"noop","name":"Deliver","config":null}` +
+	`],` +
+	`"edges":[` +
+	`{"source":"t1","target":"q1","label":""},` +
+	`{"source":"q1","target":"if1","label":""},` +
+	`{"source":"if1","target":"done","label":"true"}` +
+	`]}`
+
 // Seed inserts the exact mock dataset from
 // apps/automate-web/src/lib/mock/store.ts (5 flows, 3 executions, 4
 // connections) so the real API returns the same rows the UI was built against.
@@ -64,20 +83,26 @@ func Seed(ctx context.Context, pool *pgxpool.Pool) error {
 		updatedAt                string
 		lastRunStatus            *string
 		lastRunAt                *string
+		definition               *string
 	}
 	sp := func(s string) *string { return &s }
+	// runnableDef is a RUNNABLE FlowDef the worker's interpreter can execute:
+	// trigger.manual(t1) -> db.query(q1) -> logic.if(if1, rowCount>0) --true--> noop(done).
+	// The employees table lives in the same DB (see runflow demo). Applied to the
+	// two published flows so POST /flows/{id}/run has something to run.
+	def := runnableDef
 	flowRows := []flowRow{
-		{"flw_payroll", "Payroll → Bank MFT", "Finance", "published", 3, iso1, sp("success"), sp(iso0)},
-		{"flw_headcount", "Daily Headcount → Email", "HR Ops", "published", 2, iso2, sp("success"), sp(iso0)},
-		{"flw_leave", "Leave Balance Report", "HR Ops", "paused", 1, iso5, sp("failed"), sp(iso3)},
-		{"flw_newhire", "New Hire Onboarding Export", "HR Ops", "draft", 0, iso0, nil, nil},
-		{"flw_gov", "Gov Submission (TIS-620)", "Compliance", "stopped", 4, iso9, sp("cancelled"), sp(iso8)},
+		{"flw_payroll", "Payroll → Bank MFT", "Finance", "published", 3, iso1, sp("success"), sp(iso0), &def},
+		{"flw_headcount", "Daily Headcount → Email", "HR Ops", "published", 2, iso2, sp("success"), sp(iso0), &def},
+		{"flw_leave", "Leave Balance Report", "HR Ops", "paused", 1, iso5, sp("failed"), sp(iso3), nil},
+		{"flw_newhire", "New Hire Onboarding Export", "HR Ops", "draft", 0, iso0, nil, nil, nil},
+		{"flw_gov", "Gov Submission (TIS-620)", "Compliance", "stopped", 4, iso9, sp("cancelled"), sp(iso8), nil},
 	}
 	for _, f := range flowRows {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO flows (id, name, folder, status, current_version, updated_at, last_run_status, last_run_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			f.id, f.name, f.folder, f.status, f.version, f.updatedAt, f.lastRunStatus, f.lastRunAt); err != nil {
+			`INSERT INTO flows (id, name, folder, status, current_version, updated_at, last_run_status, last_run_at, definition)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			f.id, f.name, f.folder, f.status, f.version, f.updatedAt, f.lastRunStatus, f.lastRunAt, f.definition); err != nil {
 			return fmt.Errorf("postgres: seed flow %s: %w", f.id, err)
 		}
 	}

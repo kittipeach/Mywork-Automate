@@ -7,7 +7,11 @@
 // excluded from the unit-coverage gate (like automate-worker/pgxquerier).
 package store
 
-import "context"
+import (
+	"context"
+
+	"github.com/mywork/automate/internal/flowspec"
+)
 
 // LastRun mirrors the TS `lastRun?: { status, at }` optional object. It is a
 // pointer field on FlowSummary so it serialises to `null`/absent when a flow
@@ -98,13 +102,49 @@ func IsNotFound(err error) bool {
 	return ok
 }
 
-// Store is the read contract the httpapi handlers depend on. It is small and
-// interface-based so handlers can be unit-tested with an in-memory fake and
-// the pgx implementation can be swapped in at runtime.
+// ConnectionInput carries the mutable fields when creating or updating a
+// connection. AllowedRoles may be nil (treated as empty/public).
+type ConnectionInput struct {
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Host         string   `json:"host"`
+	AllowedRoles []string `json:"allowedRoles"`
+}
+
+// Store is the contract the httpapi handlers depend on: the read endpoints plus
+// the write endpoints that close the execution loop (run/record) and edit the
+// flow/connection catalog. It is small and interface-based so handlers can be
+// unit-tested with an in-memory fake and the pgx implementation swapped in at
+// runtime.
 type Store interface {
 	ListFlows(ctx context.Context, f FlowFilter) ([]FlowSummary, error)
 	GetFlow(ctx context.Context, id string) (FlowSummary, error)
 	ListExecutions(ctx context.Context, f ExecutionFilter) ([]Execution, error)
 	GetExecution(ctx context.Context, id string) (Execution, error)
 	ListConnections(ctx context.Context, roles []string) ([]Connection, error)
+
+	// GetFlowDefinition returns the flow's runnable graph, or ErrNotFound when
+	// the flow is unknown or has no definition (NULL/absent).
+	GetFlowDefinition(ctx context.Context, id string) (flowspec.FlowDef, error)
+
+	// CreateExecution inserts a new execution row (status is usually "running").
+	CreateExecution(ctx context.Context, e Execution) error
+	// FinishExecution updates an execution's terminal status+duration and inserts
+	// its ordered steps in one transaction.
+	FinishExecution(ctx context.Context, id, status string, durationMs int64, steps []ExecutionStep) error
+
+	// CreateFlow inserts a new draft flow (version 0, no definition) and returns
+	// its summary.
+	CreateFlow(ctx context.Context, name, folder string) (FlowSummary, error)
+	// UpdateFlowDefinition saves the draft graph on an existing flow.
+	UpdateFlowDefinition(ctx context.Context, id string, def flowspec.FlowDef) error
+	// PublishFlow bumps current_version and sets status="published".
+	PublishFlow(ctx context.Context, id string) (FlowSummary, error)
+
+	// CreateConnection inserts a new connection and returns it.
+	CreateConnection(ctx context.Context, in ConnectionInput) (Connection, error)
+	// UpdateConnection replaces a connection's mutable fields.
+	UpdateConnection(ctx context.Context, id string, in ConnectionInput) (Connection, error)
+	// DeleteConnection removes a connection (ErrNotFound when unknown).
+	DeleteConnection(ctx context.Context, id string) error
 }

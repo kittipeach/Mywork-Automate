@@ -2,30 +2,100 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Plus, Search, FolderOpen } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Plus, Search, FolderOpen, X } from 'lucide-react';
 import { TopBar } from '@/components/shell/TopBar';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/Badge';
 import { useFlows } from '@/api/hooks';
+import { useCreateFlow } from '@/api/mutations';
 
 export default function FlowsPage() {
+  const router = useRouter();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [folder, setFolder] = useState('HR Ops');
   const { data, isLoading } = useFlows({ q, status });
+  const createFlow = useCreateFlow();
   const flows = data?.flows ?? [];
+
+  const submitNewFlow = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || createFlow.isPending) return;
+    createFlow.mutate(
+      { name: name.trim(), folder: folder.trim() || 'General' },
+      {
+        onSuccess: (flow) => {
+          setCreating(false);
+          setName('');
+          router.push(`/automate/flows/${flow.id}`);
+        },
+      },
+    );
+  };
 
   return (
     <>
       <TopBar
         title="Flows"
         actions={
-          <Button size="sm">
+          <Button size="sm" onClick={() => setCreating(true)}>
             <Plus className="h-4 w-4" /> New flow
           </Button>
         }
       />
       <main className="flex-1 overflow-auto p-6">
+        {creating && (
+          <Card className="mb-4 p-4">
+            <form onSubmit={submitNewFlow} className="flex flex-wrap items-end gap-3">
+              <div className="flex-1 min-w-[12rem]">
+                <label htmlFor="new-flow-name" className="mb-1 block text-xs font-medium text-ink-muted">
+                  Flow name
+                </label>
+                <input
+                  id="new-flow-name"
+                  autoFocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Monthly Tax Export"
+                  className="h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:ring-2 focus:ring-brand"
+                />
+              </div>
+              <div className="min-w-[10rem]">
+                <label htmlFor="new-flow-folder" className="mb-1 block text-xs font-medium text-ink-muted">
+                  Folder
+                </label>
+                <input
+                  id="new-flow-folder"
+                  value={folder}
+                  onChange={(e) => setFolder(e.target.value)}
+                  placeholder="Folder"
+                  className="h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none focus:ring-2 focus:ring-brand"
+                />
+              </div>
+              <Button type="submit" size="sm" disabled={!name.trim() || createFlow.isPending}>
+                {createFlow.isPending ? 'Creating…' : 'Create'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setCreating(false)}
+                aria-label="Cancel new flow"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+              {createFlow.isError && (
+                <span className="w-full text-xs text-danger">
+                  Couldn’t create the flow. Please try again.
+                </span>
+              )}
+            </form>
+          </Card>
+        )}
         <div className="mb-4 flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-subtle" />

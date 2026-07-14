@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
 )
@@ -18,10 +19,11 @@ import (
 // APIBasePath is the versioned control-plane prefix (docs/spec/06 §2).
 const APIBasePath = "/api/automate/v1"
 
-// NewRouter builds the Gin engine for the given config and data store. The
-// store backs the read endpoints (/flows, /executions, /connections); /nodes is
-// served from the static Go registry independent of the store.
-func NewRouter(cfg config.Config, st store.Store) *gin.Engine {
+// NewRouter builds the Gin engine for the given config, data store and flow
+// Runner. The store backs the read+write endpoints (/flows, /executions,
+// /connections); /nodes is served from the static Go registry. The runner backs
+// POST /flows/{id}/run and may be nil (Temporal unavailable) — /run then 503s.
+func NewRouter(cfg config.Config, st store.Store, run runner.Runner) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(corsMiddleware())
@@ -33,7 +35,7 @@ func NewRouter(cfg config.Config, st store.Store) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "env": cfg.Env})
 	})
 
-	h := &handlers{store: st}
+	h := &handlers{store: st, runner: run}
 
 	v1 := r.Group(APIBasePath)
 	// GET /auth/config — frontend uses this to decide whether to render the
@@ -53,6 +55,16 @@ func NewRouter(cfg config.Config, st store.Store) *gin.Engine {
 	v1.GET("/executions", h.listExecutions)
 	v1.GET("/executions/:id", h.getExecution)
 	v1.GET("/connections", h.listConnections)
+
+	// Write endpoints (close the execution loop + edit the catalog).
+	v1.POST("/flows", h.createFlow)
+	v1.POST("/flows/:id/run", h.runFlow)
+	v1.PUT("/flows/:id/draft", h.updateFlowDraft)
+	v1.POST("/flows/:id/publish", h.publishFlow)
+	v1.POST("/connections", h.createConnection)
+	v1.PUT("/connections/:id", h.updateConnection)
+	v1.DELETE("/connections/:id", h.deleteConnection)
+	v1.POST("/connections/:id/test", h.testConnection)
 
 	return r
 }

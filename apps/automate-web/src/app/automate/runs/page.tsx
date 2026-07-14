@@ -1,17 +1,12 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { TopBar } from '@/components/shell/TopBar';
 import { Card } from '@/components/ui/Card';
-import { StatusBadge, type RunStatus } from '@/components/ui/Badge';
+import { StatusBadge } from '@/components/ui/Badge';
 import { useExecutions } from '@/api/hooks';
-
-function fmtDuration(ms: number): string {
-  if (ms === 0) return '—';
-  if (ms < 1000) return `${ms}ms`;
-  const s = Math.round(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-}
+import { fmtDuration, stepDotColor } from '@/api/format';
 
 export default function RunsPage() {
   const [status, setStatus] = useState('');
@@ -46,23 +41,32 @@ export default function RunsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {runs.map((e) => (
-                <tr key={e.id} className="hover:bg-surface-sunken">
+                <tr key={e.id} className="group hover:bg-surface-sunken">
                   <td className="px-5 py-3">
-                    <div className="font-medium text-ink">{e.flowName}</div>
+                    <Link
+                      href={`/automate/runs/${e.id}`}
+                      className="font-medium text-ink group-hover:text-brand"
+                    >
+                      {e.flowName}
+                    </Link>
                     <div className="text-xs text-ink-subtle">{e.id} · v{e.version}</div>
                   </td>
                   <td className="px-5 py-3 capitalize text-ink-muted">{e.trigger}</td>
                   <td className="px-5 py-3"><StatusBadge status={e.status} /></td>
                   <td className="px-5 py-3">
-                    <div className="flex items-center gap-1">
+                    <Link
+                      href={`/automate/runs/${e.id}`}
+                      className="flex items-center gap-1"
+                      aria-label={`View run ${e.id}`}
+                    >
                       {e.steps.map((s) => (
                         <span
                           key={s.nodeId}
                           title={`${s.nodeName} · ${s.status}`}
-                          className={`h-2 w-6 rounded-full ${dotColor(s.status)}`}
+                          className={`h-2 w-6 rounded-full ${stepDotColor(s.status)}`}
                         />
                       ))}
-                    </div>
+                    </Link>
                   </td>
                   <td className="px-5 py-3 text-ink-muted">{fmtDuration(e.durationMs)}</td>
                 </tr>
@@ -73,11 +77,4 @@ export default function RunsPage() {
       </main>
     </>
   );
-}
-
-function dotColor(s: RunStatus): string {
-  if (s === 'success') return 'bg-success';
-  if (s === 'failed') return 'bg-danger';
-  if (s === 'running') return 'bg-info animate-pulse';
-  return 'bg-border';
 }

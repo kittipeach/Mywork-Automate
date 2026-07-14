@@ -76,9 +76,9 @@ func TestExecuteNode_LogicIf(t *testing.T) {
 	cfg, _ := json.Marshal(map[string]any{"left": "rowCount", "op": ">", "right": 0})
 
 	tests := []struct {
-		name     string
-		in       []map[string]any
-		wantDec  string
+		name    string
+		in      []map[string]any
+		wantDec string
 	}{
 		{"has rows -> true", []map[string]any{{"a": 1}}, "true"},
 		{"no rows -> false", nil, "false"},

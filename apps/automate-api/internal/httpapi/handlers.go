@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mywork/automate/apps/automate-api/internal/nodes"
+	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 )
 
@@ -23,9 +24,11 @@ func errorEnvelope(c *gin.Context, status int, code, message string) {
 	c.JSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }
 
-// handlers bundles the store dependency for the read endpoints.
+// handlers bundles the dependencies for the read and write endpoints: the data
+// store and the flow Runner (nil when Temporal is unavailable — /run then 503s).
 type handlers struct {
-	store store.Store
+	store  store.Store
+	runner runner.Runner
 }
 
 // listNodes → GET /nodes: the static Go node registry as { nodes: [...] }.
