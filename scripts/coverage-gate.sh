@@ -23,10 +23,12 @@ fi
 #   /cmd/            — thin main-package wiring (server start, signal handling)
 #   /pgxquerier/     — real-Postgres adapter, covered by the `integration` test
 #   /store/postgres/ — real-Postgres control-plane store, `integration`-tested
+#   /audit/postgres/ — real-Postgres audit store, `integration`-tested
 #   /runner/         — Temporal-client run adapter, exercised at runtime
+#   scheduler/temporal.go — Temporal ScheduleClient adapter, exercised at runtime
 # Build a filtered profile that keeps the mode header.
 FILTERED=coverage.filtered.out
-grep -vE '/cmd/|/pgxquerier/|/store/postgres/|/runner/' coverage.out > "$FILTERED"
+grep -vE '/cmd/|/pgxquerier/|/store/postgres/|/audit/postgres/|/runner/|/scheduler/temporal\.go' coverage.out > "$FILTERED"
 
 # Per-PACKAGE statement coverage from the raw profile (CLAUDE.md rule 2:
 # "pkg/*, internal/* other ≥ 95%" is a package-level bar; the four critical

@@ -31,7 +31,7 @@ func rbacRouter() http.Handler {
 	fake := seedFake()
 	fake.def = sampleDef()
 	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1", "q1"}}}
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, fake, run, AuthConfig{})
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, fake, run, nil, nil, AuthConfig{})
 }
 
 // doRoleReq issues a request with an X-Role header (empty role → no header).
@@ -145,7 +145,7 @@ func tokenForRoles(t *testing.T, roles []string) (string, *auth.Service, http.Ha
 	fake := seedFake()
 	fake.def = sampleDef()
 	cfg := config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal, AuthLocalEnabled: true}
-	r := NewRouter(cfg, fake, runner.Runner(&fakeRunner{}), AuthConfig{Service: svc})
+	r := NewRouter(cfg, fake, runner.Runner(&fakeRunner{}), nil, nil, AuthConfig{Service: svc})
 	return tok, svc, r
 }
 

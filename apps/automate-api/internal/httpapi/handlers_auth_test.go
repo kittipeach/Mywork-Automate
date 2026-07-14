@@ -38,7 +38,7 @@ func loginRouter(t *testing.T) (http.Handler, *auth.Service) {
 	t.Helper()
 	svc := loginService(t)
 	cfg := config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal, AuthLocalEnabled: true}
-	r := NewRouter(cfg, seedFake(), runner.Runner(&fakeRunner{}), AuthConfig{Service: svc})
+	r := NewRouter(cfg, seedFake(), runner.Runner(&fakeRunner{}), nil, nil, AuthConfig{Service: svc})
 	return r, svc
 }
 
@@ -64,7 +64,7 @@ func TestLogin_WithSlogLogger(t *testing.T) {
 	svc := loginService(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal, AuthLocalEnabled: true}
-	r := NewRouter(cfg, seedFake(), runner.Runner(&fakeRunner{}), AuthConfig{Service: svc, Logger: logger})
+	r := NewRouter(cfg, seedFake(), runner.Runner(&fakeRunner{}), nil, nil, AuthConfig{Service: svc, Logger: logger})
 
 	w, body := postJSON(t, r, APIBasePath+"/auth/local/login",
 		`{"email":"`+auth.DevAdminEmail+`","password":"`+auth.DevAdminPassword+`"}`, nil)
@@ -154,7 +154,7 @@ func TestLogin_Lockout_423(t *testing.T) {
 
 func TestLogin_NotRegisteredWhenLocalAuthDisabled(t *testing.T) {
 	// No service → POST /auth/local/login is not registered → 404.
-	r := NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, seedFake(), nil, AuthConfig{})
+	r := NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, seedFake(), nil, nil, nil, AuthConfig{})
 	w, _ := postJSON(t, r, APIBasePath+"/auth/local/login", `{"email":"a@b","password":"x"}`, nil)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (route absent)", w.Code)

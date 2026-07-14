@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/nodes"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
+	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 )
 
@@ -25,10 +29,60 @@ func errorEnvelope(c *gin.Context, status int, code, message string) {
 }
 
 // handlers bundles the dependencies for the read and write endpoints: the data
-// store and the flow Runner (nil when Temporal is unavailable — /run then 503s).
+// store, the flow Runner (nil when Temporal is unavailable — /run then 503s),
+// the append-only audit trail (never nil — Noop when auditing is disabled) and
+// the schedule Scheduler (never nil — Noop when Temporal is unavailable). log is
+// used only for the "audit/scheduler failed but the request still succeeds"
+// WARN path; nil is tolerated (no-op).
 type handlers struct {
 	store  store.Store
 	runner runner.Runner
+	audit  audit.Service
+	sched  scheduler.Scheduler
+	log    *slog.Logger
+}
+
+// record appends one audit entry after a mutating action has already succeeded.
+// An audit failure must never break the request (docs/spec/07 §6): it is logged
+// at WARN and the caller proceeds. c is used for the request-scoped context, the
+// client IP and the user-agent; role/action/resource are supplied by the caller.
+func (h *handlers) record(c *gin.Context, e audit.Entry) {
+	e.Role = string(callerRole(c))
+	e.IP = c.ClientIP()
+	e.UserAgent = c.Request.UserAgent()
+	if err := h.audit.Record(c.Request.Context(), e); err != nil && h.log != nil {
+		h.log.Warn("audit record failed", "action", e.Action, "err", err)
+	}
+}
+
+// listAuditLogs → GET /audit-logs?action=&from=&to=&limit= → { auditLogs: [...] }.
+// Admin-only (gated by RequireAdmin on the route). Limit is clamped by the audit
+// package's shared page-size policy.
+func (h *handlers) listAuditLogs(c *gin.Context) {
+	entries, err := h.audit.List(c.Request.Context(), audit.Filter{
+		Action: c.Query("action"),
+		From:   c.Query("from"),
+		To:     c.Query("to"),
+		Limit:  parseLimit(c.Query("limit")),
+	})
+	if err != nil {
+		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"auditLogs": entries})
+}
+
+// parseLimit turns the ?limit= query string into an int; a missing or malformed
+// value yields 0, which ClampLimit maps to the default page size.
+func parseLimit(s string) int {
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // listNodes → GET /nodes: the static Go node registry as { nodes: [...] }.

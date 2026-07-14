@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
+	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/internal/flowspec"
@@ -141,7 +143,14 @@ func (r *fakeRunner) Run(_ context.Context, _ string, _ flowspec.FlowInput, onDo
 }
 
 func routerWithRunner(st store.Store, run runner.Runner) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, AuthConfig{})
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{})
+}
+
+// routerWithDeps builds a router with an explicit audit.Service and Scheduler so
+// the audit/scheduler wiring can be asserted. A nil auditSvc/sched falls back to
+// the Noop implementations inside NewRouter.
+func routerWithDeps(st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler) http.Handler {
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, auditSvc, sched, AuthConfig{})
 }
 
 // --- tests ---

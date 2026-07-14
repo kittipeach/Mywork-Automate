@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
 	"github.com/mywork/automate/pkg/authz"
 )
@@ -15,12 +16,15 @@ import (
 const ctxRoleKey = "authz.role"
 
 // authDeps bundles the auth collaborators the router needs: the login/verify
-// service and a logger for audit. Both may be nil when local auth is disabled —
-// the middleware then falls back to the X-Role header / defaultRole so existing
-// dev flows and tests keep working.
+// service, a logger for structured auth events and the append-only audit trail.
+// service/log may be nil when local auth is disabled — the middleware then falls
+// back to the X-Role header / defaultRole so existing dev flows and tests keep
+// working. audit is never nil (Noop when auditing is disabled) so localLogin can
+// Record unconditionally.
 type authDeps struct {
 	service *auth.Service
 	log     func(msg string, kv ...any)
+	audit   audit.Service
 }
 
 // resolveRole is middleware that determines the caller's effective role and
@@ -105,6 +109,22 @@ func RequirePermission(p authz.Permission) gin.HandlerFunc {
 		if !authz.Can(role, p) {
 			errorEnvelope(c, http.StatusForbidden, "forbidden",
 				"role does not have permission: "+string(p))
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireAdmin returns middleware that aborts with 403 unless the caller's
+// resolved role is exactly authz.Admin. It gates admin-only surfaces such as the
+// audit-log read model (docs/spec/07 §6), where a permission gate would leak the
+// trail to any role sharing that permission. Deny-by-default: every non-admin
+// (and every unknown) role is denied.
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if callerRole(c) != authz.Admin {
+			errorEnvelope(c, http.StatusForbidden, "forbidden", "admin role required")
 			c.Abort()
 			return
 		}

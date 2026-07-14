@@ -12,8 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
+	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/pkg/authz"
@@ -32,13 +34,24 @@ type AuthConfig struct {
 	Logger  *slog.Logger
 }
 
-// NewRouter builds the Gin engine for the given config, data store, flow Runner
-// and auth wiring. The store backs the read+write endpoints (/flows,
-// /executions, /connections); /nodes is served from the static Go registry. The
-// runner backs POST /flows/{id}/run and may be nil (Temporal unavailable) —
-// /run then 503s. authCfg wires local login + RBAC role resolution; pass a
-// zero AuthConfig to run without local auth (X-Role / defaultRole fallback).
-func NewRouter(cfg config.Config, st store.Store, run runner.Runner, authCfg AuthConfig) *gin.Engine {
+// NewRouter builds the Gin engine for the given config, data store, flow Runner,
+// audit trail, schedule Scheduler and auth wiring. The store backs the
+// read+write endpoints (/flows, /executions, /connections); /nodes is served
+// from the static Go registry. The runner backs POST /flows/{id}/run and may be
+// nil (Temporal unavailable) — /run then 503s. auditSvc records every mutating
+// action and backs GET /audit-logs; sched keeps published flows' schedules in
+// sync — both must be non-nil (the composition root passes audit.NewNoop() /
+// scheduler.Noop{} when the backend is unavailable). authCfg wires local login +
+// RBAC role resolution; pass a zero AuthConfig to run without local auth (X-Role
+// / defaultRole fallback).
+func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig) *gin.Engine {
+	if auditSvc == nil {
+		auditSvc = audit.NewNoop()
+	}
+	if sched == nil {
+		sched = scheduler.Noop{}
+	}
+
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(corsMiddleware())
@@ -50,9 +63,9 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, authCfg Aut
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "env": cfg.Env})
 	})
 
-	h := &handlers{store: st, runner: run}
+	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger}
 
-	deps := authDeps{service: authCfg.Service}
+	deps := authDeps{service: authCfg.Service, audit: auditSvc}
 	if authCfg.Logger != nil {
 		log := authCfg.Logger
 		deps.log = func(msg string, kv ...any) { log.Info(msg, kv...) }
@@ -93,6 +106,11 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, authCfg Aut
 	authed.GET("/executions", RequirePermission(authz.RunView), h.listExecutions)
 	authed.GET("/executions/:id", RequirePermission(authz.RunView), h.getExecution)
 	authed.GET("/connections", RequirePermission(authz.FlowView), h.listConnections)
+
+	// Audit trail read model — admin-only (docs/spec/07 §6). A permission gate
+	// would leak the trail to any role sharing that permission, so it is gated on
+	// the exact admin role.
+	authed.GET("/audit-logs", RequireAdmin(), h.listAuditLogs)
 
 	// Write endpoints (close the execution loop + edit the catalog).
 	authed.POST("/flows", RequirePermission(authz.FlowCreate), h.createFlow)

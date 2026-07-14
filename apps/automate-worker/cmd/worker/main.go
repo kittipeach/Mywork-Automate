@@ -25,8 +25,10 @@ import (
 	"github.com/mywork/automate/apps/automate-worker/internal/worker"
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/pkg/filestore"
+	"github.com/mywork/automate/pkg/logscrub"
 	mailersmtp "github.com/mywork/automate/pkg/mailer/smtp"
 	"github.com/mywork/automate/pkg/masking"
+	"github.com/mywork/automate/pkg/obs"
 	"github.com/mywork/automate/pkg/secrets"
 )
 
@@ -55,7 +57,17 @@ func getenv(key, def string) string {
 }
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// JSON logs (E11-S3, ELK) with secret scrubbing (spec 07 §4).
+	logger := slog.New(logscrub.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(logger)
+
+	// OpenTelemetry tracing (E11-S1). Stdout exporter by default; a collector
+	// sidecar forwards to App Insights. Non-fatal on error.
+	if shutdown, err := obs.Init(context.Background(), "automate-worker"); err != nil {
+		logger.Warn("otel init failed", "err", err)
+	} else {
+		defer func() { _ = shutdown(context.Background()) }()
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {

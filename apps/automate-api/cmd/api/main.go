@@ -14,12 +14,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	temporalclient "go.temporal.io/sdk/client"
 
+	"github.com/mywork/automate/apps/automate-api/internal/audit"
+	auditpg "github.com/mywork/automate/apps/automate-api/internal/audit/postgres"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
+	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store/postgres"
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/internal/flowspec"
+	"github.com/mywork/automate/pkg/logscrub"
+	"github.com/mywork/automate/pkg/obs"
 )
 
 // devJWTSecret is used only when AUTH_LOCAL_ENABLED=true and AUTH_JWT_SECRET is
@@ -54,7 +59,22 @@ func buildAuthConfig(cfg config.Config, logger *slog.Logger) (httpapi.AuthConfig
 }
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// Secrets must never reach the logs: wrap the JSON handler with logscrub so
+	// every record is scrubbed before it is written. Install as the default so
+	// libraries logging via slog are scrubbed too.
+	logger := slog.New(logscrub.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(logger)
+
+	ctx := context.Background()
+
+	// Observability: install the OTel tracer provider (one trace per run, one
+	// span per node). A failure here must not stop the API — log and continue.
+	shutdownObs, err := obs.Init(ctx, "automate-api")
+	if err != nil {
+		logger.Warn("observability init failed; continuing without tracing", "err", err)
+	} else {
+		defer func() { _ = shutdownObs(context.Background()) }()
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
@@ -67,7 +87,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("database connect failed", "err", err)
@@ -93,10 +112,21 @@ func main() {
 
 	st := postgres.New(pool)
 
+	// Audit trail: the pgx-backed Service when a pool is configured, otherwise a
+	// Noop so handlers can Record unconditionally. pool is always non-nil here
+	// (DATABASE_URL is required above), but keep the guard so the contract is
+	// explicit and testable.
+	var auditSvc audit.Service = audit.NewNoop()
+	if pool != nil {
+		auditSvc = auditpg.New(pool)
+	}
+
 	// Temporal is optional at startup: the read endpoints work without it, and
 	// POST /flows/{id}/run degrades to 503 until it is reachable. Dial once; on
-	// failure log a WARN and pass a nil Runner so the server still starts.
+	// failure log a WARN and pass a nil Runner + Noop Scheduler so the server
+	// still starts (publish then no-ops its schedule sync).
 	var run runner.Runner
+	var sched scheduler.Scheduler = scheduler.Noop{}
 	tc, err := temporalclient.Dial(temporalclient.Options{
 		HostPort:  cfg.TemporalHostPort,
 		Namespace: flowspec.Namespace,
@@ -107,6 +137,7 @@ func main() {
 	} else {
 		defer tc.Close()
 		run = runner.New(tc)
+		sched = scheduler.New(tc)
 		logger.Info("temporal client connected", "hostport", cfg.TemporalHostPort, "namespace", flowspec.Namespace)
 	}
 
@@ -118,7 +149,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg, st, run, authCfg),
+		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

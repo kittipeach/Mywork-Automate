@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mywork/automate/apps/automate-api/internal/audit"
+	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/flowspec"
 )
@@ -108,6 +110,13 @@ func (h *handlers) runFlow(c *gin.Context) {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+
+	h.record(c, audit.Entry{
+		Action:       audit.ActionExecutionManualRun,
+		ResourceType: "flow",
+		ResourceID:   flow.ID,
+		Detail:       map[string]any{"executionId": execID},
+	})
 
 	c.JSON(http.StatusAccepted, gin.H{"executionId": execID})
 }
@@ -219,6 +228,12 @@ func (h *handlers) createFlow(c *gin.Context) {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	h.record(c, audit.Entry{
+		Action:       audit.ActionFlowCreate,
+		ResourceType: "flow",
+		ResourceID:   flow.ID,
+		Detail:       map[string]any{"name": flow.Name},
+	})
 	c.JSON(http.StatusCreated, flow)
 }
 
@@ -243,9 +258,17 @@ func (h *handlers) updateFlowDraft(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// publishFlow → POST /flows/{id}/publish → 200 the published flow.
+// publishFlow → POST /flows/{id}/publish → 200 the published flow. After the
+// store publishes, it syncs the flow's recurring schedule to the scheduler:
+// SpecFromDefinition compiles the definition, then Sync (when the flow has a
+// trigger.schedule node) or Delete (idempotent — the flow no longer schedules
+// itself). A scheduler/definition error does not fail the publish (it already
+// committed): it is logged at WARN and the published flow is still returned.
 func (h *handlers) publishFlow(c *gin.Context) {
-	flow, err := h.store.PublishFlow(c.Request.Context(), c.Param("id"))
+	id := c.Param("id")
+	ctx := c.Request.Context()
+
+	flow, err := h.store.PublishFlow(ctx, id)
 	if err != nil {
 		if store.IsNotFound(err) {
 			errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
@@ -254,7 +277,57 @@ func (h *handlers) publishFlow(c *gin.Context) {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+
+	h.record(c, audit.Entry{
+		Action:       audit.ActionFlowPublish,
+		ResourceType: "flow",
+		ResourceID:   flow.ID,
+		Detail:       map[string]any{"version": flow.Version},
+	})
+
+	h.syncSchedule(c, flow.ID)
+
 	c.JSON(http.StatusOK, flow)
+}
+
+// syncSchedule keeps flowID's recurring schedule in step with its published
+// definition. It loads the definition, compiles it with SpecFromDefinition, then
+// Sync's the schedule if the flow has one or Delete's it (idempotent) if it does
+// not. Every failure here is non-fatal to publish — the store already committed —
+// so each is logged at WARN and swallowed.
+func (h *handlers) syncSchedule(c *gin.Context, flowID string) {
+	ctx := c.Request.Context()
+
+	def, err := h.store.GetFlowDefinition(ctx, flowID)
+	if err != nil {
+		h.warn("publish: load definition for schedule sync failed", "flowId", flowID, "err", err)
+		return
+	}
+
+	spec, hasSchedule, err := scheduler.SpecFromDefinition(def)
+	if err != nil {
+		h.warn("publish: compile schedule spec failed", "flowId", flowID, "err", err)
+		return
+	}
+
+	if !hasSchedule {
+		if err := h.sched.Delete(ctx, flowID); err != nil {
+			h.warn("publish: delete schedule failed", "flowId", flowID, "err", err)
+		}
+		return
+	}
+
+	in := flowspec.FlowInput{Flow: def, ViewerRoles: []string{string(callerRole(c))}}
+	if err := h.sched.Sync(ctx, flowID, spec, in); err != nil {
+		h.warn("publish: sync schedule failed", "flowId", flowID, "err", err)
+	}
+}
+
+// warn logs at WARN when a logger is configured; nil is tolerated (no-op).
+func (h *handlers) warn(msg string, kv ...any) {
+	if h.log != nil {
+		h.log.Warn(msg, kv...)
+	}
 }
 
 // createConnection → POST /connections → 201 the new connection.
@@ -273,6 +346,12 @@ func (h *handlers) createConnection(c *gin.Context) {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	h.record(c, audit.Entry{
+		Action:       audit.ActionConnectionCreate,
+		ResourceType: "connection",
+		ResourceID:   conn.ID,
+		Detail:       map[string]any{"name": conn.Name, "type": conn.Type},
+	})
 	c.JSON(http.StatusCreated, conn)
 }
 
@@ -292,12 +371,19 @@ func (h *handlers) updateConnection(c *gin.Context) {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	h.record(c, audit.Entry{
+		Action:       audit.ActionConnectionUpdate,
+		ResourceType: "connection",
+		ResourceID:   conn.ID,
+		Detail:       map[string]any{"name": conn.Name, "type": conn.Type},
+	})
 	c.JSON(http.StatusOK, conn)
 }
 
 // deleteConnection → DELETE /connections/{id} → 204.
 func (h *handlers) deleteConnection(c *gin.Context) {
-	err := h.store.DeleteConnection(c.Request.Context(), c.Param("id"))
+	id := c.Param("id")
+	err := h.store.DeleteConnection(c.Request.Context(), id)
 	if err != nil {
 		if store.IsNotFound(err) {
 			errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
@@ -306,6 +392,11 @@ func (h *handlers) deleteConnection(c *gin.Context) {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+	h.record(c, audit.Entry{
+		Action:       audit.ActionConnectionDelete,
+		ResourceType: "connection",
+		ResourceID:   id,
+	})
 	c.Status(http.StatusNoContent)
 }
 
