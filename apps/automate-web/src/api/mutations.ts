@@ -2,20 +2,36 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { FlowSummary } from '@/lib/mock/store';
+import { authHeader } from '@/lib/token';
 import { BASE } from './hooks';
 
 /**
  * Small POST helper mirroring getJSON in hooks.ts. Sends `body` as JSON (default
  * `{}`) and parses the JSON response. 202/201/200 all parse the body; callers
  * type the result. Throws on any non-2xx so TanStack Query surfaces isError.
+ *
+ * The thrown error carries the HTTP `status` so callers can distinguish, e.g.,
+ * 409 invalid-transition or 423 locked from a generic failure.
  */
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+  ) {
+    super(`${path} → ${status}`);
+    this.name = 'ApiError';
+  }
+}
+
 export async function poster<T>(path: string, body: unknown = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    // authHeader() attaches the bearer token when present (spreads to nothing
+    // otherwise), so every mutation is authenticated without per-call plumbing.
+    headers: { 'content-type': 'application/json', ...authHeader() },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, path);
   return res.json() as Promise<T>;
 }
 
@@ -44,13 +60,77 @@ export function useCreateFlow() {
   });
 }
 
-/** POST /flows/{id}/publish → 200 FlowSummary. Invalidates the flows list. */
+/**
+ * POST /flows/{id}/publish (body {changeNote}) → 200 FlowSummary. The API now
+ * requires a change note per publish (it becomes the version's changeNote), so
+ * callers pass both the flow id and the note. Invalidates flows + that flow's
+ * version history.
+ */
 export function usePublishFlow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (flowId: string) => poster<FlowSummary>(`/flows/${flowId}/publish`, {}),
+    mutationFn: ({ flowId, changeNote }: { flowId: string; changeNote: string }) =>
+      poster<FlowSummary>(`/flows/${flowId}/publish`, { changeNote }),
+    onSuccess: (_data, { flowId }) => {
+      qc.invalidateQueries({ queryKey: ['flows'] });
+      qc.invalidateQueries({ queryKey: ['versions', flowId] });
+    },
+  });
+}
+
+export type LifecycleAction = 'pause' | 'resume' | 'stop';
+export type LifecycleResult = { status: FlowSummary['status'] };
+
+/**
+ * Shared factory for the pause/resume/stop lifecycle mutations. Each POSTs
+ * /flows/{id}/{action} → 200 {status} (409 on an invalid transition, surfaced as
+ * an ApiError with status 409) and invalidates the flows list on success.
+ */
+function useLifecycleMutation(action: LifecycleAction) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string) => poster<LifecycleResult>(`/flows/${flowId}/${action}`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['flows'] });
+    },
+  });
+}
+
+/** POST /flows/{id}/pause → 200 {status}. published → paused. */
+export function usePauseFlow() {
+  return useLifecycleMutation('pause');
+}
+
+/** POST /flows/{id}/resume → 200 {status}. paused → published. */
+export function useResumeFlow() {
+  return useLifecycleMutation('resume');
+}
+
+/** POST /flows/{id}/stop → 200 {status}. published|paused → stopped. */
+export function useStopFlow() {
+  return useLifecycleMutation('stop');
+}
+
+/**
+ * POST /flows/{id}/rollback (body {toVersion, changeNote}) → 200 FlowSummary.
+ * Restores an earlier published version as a new version. Invalidates the flows
+ * list and that flow's version history.
+ */
+export function useRollback() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      flowId,
+      toVersion,
+      changeNote,
+    }: {
+      flowId: string;
+      toVersion: number;
+      changeNote: string;
+    }) => poster<FlowSummary>(`/flows/${flowId}/rollback`, { toVersion, changeNote }),
+    onSuccess: (_data, { flowId }) => {
+      qc.invalidateQueries({ queryKey: ['flows'] });
+      qc.invalidateQueries({ queryKey: ['versions', flowId] });
     },
   });
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mywork/automate/apps/automate-api/internal/store"
+	"github.com/mywork/automate/internal/flowspec"
 )
 
 func dsn() string {
@@ -238,5 +239,82 @@ func TestIntegration_ListConnectionsRBAC(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Fatalf("auditor connections = %d, want 0", len(none))
+	}
+}
+
+// TestIntegration_SetFlowStatus verifies the pause/resume/stop status write and
+// the NotFound path.
+func TestIntegration_SetFlowStatus(t *testing.T) {
+	ctx := context.Background()
+	pool, s := freshPool(t, ctx)
+	defer pool.Close()
+
+	if err := s.SetFlowStatus(ctx, "flw_payroll", "paused"); err != nil {
+		t.Fatalf("set status: %v", err)
+	}
+	f, err := s.GetFlow(ctx, "flw_payroll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Status != "paused" {
+		t.Fatalf("status = %q, want paused", f.Status)
+	}
+
+	if err := s.SetFlowStatus(ctx, "nope", "paused"); !store.IsNotFound(err) {
+		t.Fatalf("missing flow err = %v, want NotFound", err)
+	}
+}
+
+// TestIntegration_Versioning exercises CreateVersion → ListVersions (newest
+// first) → GetVersionDefinition round-trip against the real flow_versions table
+// (migration 0004).
+func TestIntegration_Versioning(t *testing.T) {
+	ctx := context.Background()
+	pool, s := freshPool(t, ctx)
+	defer pool.Close()
+
+	def1 := flowspec.FlowDef{Nodes: []flowspec.NodeDef{{ID: "a", Type: "trigger.manual", Name: "Start"}}}
+	def2 := flowspec.FlowDef{Nodes: []flowspec.NodeDef{{ID: "b", Type: "db.query", Name: "Query"}}}
+
+	if err := s.CreateVersion(ctx, "flw_newhire", 1, def1, "first cut", "admin"); err != nil {
+		t.Fatalf("create version 1: %v", err)
+	}
+	if err := s.CreateVersion(ctx, "flw_newhire", 2, def2, "second cut", "designer"); err != nil {
+		t.Fatalf("create version 2: %v", err)
+	}
+
+	// duplicate version_no violates the UNIQUE(flow_id, version_no) constraint.
+	if err := s.CreateVersion(ctx, "flw_newhire", 2, def2, "dup", "admin"); err == nil {
+		t.Fatal("duplicate version_no should error")
+	}
+
+	versions, err := s.ListVersions(ctx, "flw_newhire")
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("versions = %d, want 2", len(versions))
+	}
+	// newest first
+	if versions[0].VersionNo != 2 || versions[1].VersionNo != 1 {
+		t.Fatalf("version order = %+v, want [2,1]", versions)
+	}
+	if versions[0].ChangeNote != "second cut" || versions[0].PublishedBy != "designer" {
+		t.Fatalf("version[0] = %+v", versions[0])
+	}
+	if versions[0].PublishedAt == "" {
+		t.Fatalf("publishedAt should be set: %+v", versions[0])
+	}
+
+	got, err := s.GetVersionDefinition(ctx, "flw_newhire", 1)
+	if err != nil {
+		t.Fatalf("get version def: %v", err)
+	}
+	if len(got.Nodes) != 1 || got.Nodes[0].ID != "a" {
+		t.Fatalf("version 1 def = %+v, want pinned def1", got)
+	}
+
+	if _, err := s.GetVersionDefinition(ctx, "flw_newhire", 99); !store.IsNotFound(err) {
+		t.Fatalf("missing version err = %v, want NotFound", err)
 	}
 }

@@ -35,6 +35,18 @@ type fakeStore struct {
 	created    []store.Execution
 	finished   []finishCall
 	errWrite   error // non-notfound error from any write method
+
+	// lifecycle + versioning state/hooks (E4-S1/S2)
+	statusSets       []statusSet
+	versionsCreated  []versionCreate
+	versions         []storedVersion // pre-seeded, for ListVersions/GetVersionDefinition
+	errCreateVersion error
+	errVersions      error // error from ListVersions
+	errGetVersion    error // error from GetVersionDefinition
+	errPublish       error // error from PublishFlow only (isolates the publish step)
+	// writeNotFound forces SetFlowStatus/UpdateFlowDefinition to report NotFound
+	// (the concurrent-delete/TOCTOU branch that GetFlow can't provoke).
+	writeNotFound bool
 }
 
 type finishCall struct {
@@ -42,6 +54,25 @@ type finishCall struct {
 	status     string
 	durationMs int64
 	steps      []store.ExecutionStep
+}
+
+type statusSet struct {
+	id     string
+	status string
+}
+
+type versionCreate struct {
+	flowID      string
+	versionNo   int
+	def         flowspec.FlowDef
+	changeNote  string
+	publishedBy string
+}
+
+type storedVersion struct {
+	flowID string
+	v      store.Version
+	def    flowspec.FlowDef
 }
 
 func sp(s string) *string { return &s }

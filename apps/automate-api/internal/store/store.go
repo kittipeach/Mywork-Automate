@@ -111,6 +111,17 @@ type ConnectionInput struct {
 	AllowedRoles []string `json:"allowedRoles"`
 }
 
+// Version is one immutable published-version snapshot's metadata (docs/spec/08
+// E4-S2). The definition itself is fetched separately via GetVersionDefinition;
+// this is the list-view row. JSON tags are camelCase (the /flows/{id}/versions
+// wire contract).
+type Version struct {
+	VersionNo   int    `json:"versionNo"`
+	ChangeNote  string `json:"changeNote"`
+	PublishedBy string `json:"publishedBy"`
+	PublishedAt string `json:"publishedAt"`
+}
+
 // Store is the contract the httpapi handlers depend on: the read endpoints plus
 // the write endpoints that close the execution loop (run/record) and edit the
 // flow/connection catalog. It is small and interface-based so handlers can be
@@ -140,6 +151,20 @@ type Store interface {
 	UpdateFlowDefinition(ctx context.Context, id string, def flowspec.FlowDef) error
 	// PublishFlow bumps current_version and sets status="published".
 	PublishFlow(ctx context.Context, id string) (FlowSummary, error)
+
+	// SetFlowStatus updates only a flow's lifecycle status (pause/resume/stop).
+	// ErrNotFound when the flow is unknown.
+	SetFlowStatus(ctx context.Context, id, status string) error
+
+	// CreateVersion snapshots the given definition as an immutable version row
+	// (docs/spec/08 E4-S2). versionNo must be unique per flow; changeNote is the
+	// mandatory publish note and publishedBy the caller identity.
+	CreateVersion(ctx context.Context, flowID string, versionNo int, def flowspec.FlowDef, changeNote, publishedBy string) error
+	// ListVersions returns a flow's version metadata, newest first.
+	ListVersions(ctx context.Context, flowID string) ([]Version, error)
+	// GetVersionDefinition loads the pinned definition of one version. ErrNotFound
+	// when the (flow, versionNo) pair is unknown.
+	GetVersionDefinition(ctx context.Context, flowID string, versionNo int) (flowspec.FlowDef, error)
 
 	// CreateConnection inserts a new connection and returns it.
 	CreateConnection(ctx context.Context, in ConnectionInput) (Connection, error)

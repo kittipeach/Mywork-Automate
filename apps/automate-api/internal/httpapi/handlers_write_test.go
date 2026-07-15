@@ -71,6 +71,9 @@ func (f *fakeStore) UpdateFlowDefinition(_ context.Context, id string, _ flowspe
 	if f.errWrite != nil {
 		return f.errWrite
 	}
+	if f.writeNotFound {
+		return store.NewNotFound("flow not found: " + id)
+	}
 	for _, fl := range f.flows {
 		if fl.ID == id {
 			return nil
@@ -80,6 +83,9 @@ func (f *fakeStore) UpdateFlowDefinition(_ context.Context, id string, _ flowspe
 }
 
 func (f *fakeStore) PublishFlow(_ context.Context, id string) (store.FlowSummary, error) {
+	if f.errPublish != nil {
+		return store.FlowSummary{}, f.errPublish
+	}
 	if f.errWrite != nil {
 		return store.FlowSummary{}, f.errWrite
 	}
@@ -91,6 +97,58 @@ func (f *fakeStore) PublishFlow(_ context.Context, id string) (store.FlowSummary
 		}
 	}
 	return store.FlowSummary{}, store.NewNotFound("flow not found: " + id)
+}
+
+func (f *fakeStore) SetFlowStatus(_ context.Context, id, status string) error {
+	if f.errWrite != nil {
+		return f.errWrite
+	}
+	if f.writeNotFound {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	for i := range f.flows {
+		if f.flows[i].ID == id {
+			f.statusSets = append(f.statusSets, statusSet{id: id, status: status})
+			f.flows[i].Status = status
+			return nil
+		}
+	}
+	return store.NewNotFound("flow not found: " + id)
+}
+
+func (f *fakeStore) CreateVersion(_ context.Context, flowID string, versionNo int, def flowspec.FlowDef, changeNote, publishedBy string) error {
+	if f.errCreateVersion != nil {
+		return f.errCreateVersion
+	}
+	f.versionsCreated = append(f.versionsCreated, versionCreate{
+		flowID: flowID, versionNo: versionNo, def: def, changeNote: changeNote, publishedBy: publishedBy,
+	})
+	return nil
+}
+
+func (f *fakeStore) ListVersions(_ context.Context, flowID string) ([]store.Version, error) {
+	if f.errVersions != nil {
+		return nil, f.errVersions
+	}
+	out := make([]store.Version, 0)
+	for _, v := range f.versions {
+		if v.flowID == flowID {
+			out = append(out, v.v)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetVersionDefinition(_ context.Context, flowID string, versionNo int) (flowspec.FlowDef, error) {
+	if f.errGetVersion != nil {
+		return flowspec.FlowDef{}, f.errGetVersion
+	}
+	for _, v := range f.versions {
+		if v.flowID == flowID && v.v.VersionNo == versionNo {
+			return v.def, nil
+		}
+	}
+	return flowspec.FlowDef{}, store.NewNotFound("version not found")
 }
 
 func (f *fakeStore) CreateConnection(_ context.Context, in store.ConnectionInput) (store.Connection, error) {
@@ -267,11 +325,11 @@ func TestUpdateDraft_And_NotFound(t *testing.T) {
 
 func TestPublishFlow_And_NotFound(t *testing.T) {
 	r := routerWithRunner(seedFake(), &fakeRunner{})
-	w, body := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/publish", nil)
+	w, body := doReqBody(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/publish", `{"changeNote":"initial"}`, nil)
 	if w.Code != http.StatusOK || body["status"] != "published" {
 		t.Fatalf("publish = %d %v", w.Code, body["status"])
 	}
-	w2, _ := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/nope/publish", nil)
+	w2, _ := doReqBody(t, r, http.MethodPost, "/api/automate/v1/flows/nope/publish", `{"changeNote":"initial"}`, nil)
 	if w2.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w2.Code)
 	}

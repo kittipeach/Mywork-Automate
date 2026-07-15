@@ -23,7 +23,7 @@ describe('useAuditLogs', () => {
     fetchMock.mockReturnValueOnce(ok({ auditLogs: [] }));
     const { result } = renderHook(() => useAuditLogs(), { wrapper: wrapper() });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(fetchMock).toHaveBeenCalledWith('/api/automate/v1/audit-logs');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/automate/v1/audit-logs');
   });
 
   it('threads action + limit into the querystring', async () => {

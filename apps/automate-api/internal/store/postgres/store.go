@@ -384,6 +384,87 @@ func (s *Store) PublishFlow(ctx context.Context, id string) (store.FlowSummary, 
 	return f, nil
 }
 
+// SetFlowStatus updates only a flow's lifecycle status (pause/resume/stop) and
+// touches updated_at. ErrNotFound when the flow is unknown.
+func (s *Store) SetFlowStatus(ctx context.Context, id, status string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE flows SET status = $2, updated_at = $3 WHERE id = $1`,
+		id, status, nowISO())
+	if err != nil {
+		return fmt.Errorf("postgres: set flow status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	return nil
+}
+
+// CreateVersion snapshots def as an immutable flow_versions row. The (flow_id,
+// version_no) pair is unique — a duplicate version_no violates that constraint
+// and surfaces as an error.
+func (s *Store) CreateVersion(ctx context.Context, flowID string, versionNo int, def flowspec.FlowDef, changeNote, publishedBy string) error {
+	raw, err := json.Marshal(def)
+	if err != nil {
+		return fmt.Errorf("postgres: marshal version definition: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO flow_versions (id, flow_id, version_no, definition, change_note, published_by, published_at)
+		 VALUES (DEFAULT, $1, $2, $3, $4, $5, now())`,
+		flowID, versionNo, raw, changeNote, publishedBy); err != nil {
+		return fmt.Errorf("postgres: create version: %w", err)
+	}
+	return nil
+}
+
+// ListVersions returns a flow's version metadata, newest (highest version_no)
+// first. published_at is rendered as a millisecond ISO-8601 string.
+func (s *Store) ListVersions(ctx context.Context, flowID string) ([]store.Version, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT version_no, change_note, COALESCE(published_by, ''), published_at
+		 FROM flow_versions WHERE flow_id = $1 ORDER BY version_no DESC`, flowID)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list versions: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]store.Version, 0)
+	for rows.Next() {
+		var (
+			v  store.Version
+			ts time.Time
+		)
+		if err := rows.Scan(&v.VersionNo, &v.ChangeNote, &v.PublishedBy, &ts); err != nil {
+			return nil, fmt.Errorf("postgres: scan version: %w", err)
+		}
+		v.PublishedAt = ts.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: list versions rows: %w", err)
+	}
+	return out, nil
+}
+
+// GetVersionDefinition loads the pinned definition of one version. ErrNotFound
+// when the (flow, versionNo) pair is unknown.
+func (s *Store) GetVersionDefinition(ctx context.Context, flowID string, versionNo int) (flowspec.FlowDef, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx,
+		`SELECT definition FROM flow_versions WHERE flow_id = $1 AND version_no = $2`,
+		flowID, versionNo).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return flowspec.FlowDef{}, store.NewNotFound(fmt.Sprintf("version not found: %s v%d", flowID, versionNo))
+	}
+	if err != nil {
+		return flowspec.FlowDef{}, fmt.Errorf("postgres: get version definition: %w", err)
+	}
+	var def flowspec.FlowDef
+	if err := json.Unmarshal(raw, &def); err != nil {
+		return flowspec.FlowDef{}, fmt.Errorf("postgres: unmarshal version definition: %w", err)
+	}
+	return def, nil
+}
+
 // CreateConnection inserts a new connection (status "untested") and returns it.
 func (s *Store) CreateConnection(ctx context.Context, in store.ConnectionInput) (store.Connection, error) {
 	c := store.Connection{

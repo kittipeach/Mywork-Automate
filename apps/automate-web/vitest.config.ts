@@ -41,6 +41,16 @@ export default defineConfig({
         'src/**/index.ts',
         'src/**/types.ts',
       ],
+      // Gate (CLAUDE.md rule 2 — "apps/automate-web components/hooks ≥ 90%").
+      // Enforced per-file on the auth/API/lib logic layers so each gated file
+      // clears 90% on every metric individually (a well-covered file can't mask
+      // an under-tested sibling). The reusable UI layer is held to 100%.
+      thresholds: {
+        perFile: true,
+        'src/api/**': { statements: 90, branches: 90, functions: 90, lines: 90 },
+        'src/lib/**': { statements: 90, branches: 90, functions: 90, lines: 90 },
+        'src/components/ui/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+      },
     },
   },
 });

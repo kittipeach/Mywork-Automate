@@ -203,7 +203,7 @@ func TestWriteMethods_StoreErrors_500(t *testing.T) {
 		t.Errorf("updateDraft = %d, want 500", w.Code)
 	}
 	r2, _ := mk()
-	if w, _ := doReq(t, r2, http.MethodPost, "/api/automate/v1/flows/flw_payroll/publish", nil); w.Code != http.StatusInternalServerError {
+	if w, _ := doReqBody(t, r2, http.MethodPost, "/api/automate/v1/flows/flw_payroll/publish", `{"changeNote":"x"}`, nil); w.Code != http.StatusInternalServerError {
 		t.Errorf("publish = %d, want 500", w.Code)
 	}
 	r3, _ := mk()

@@ -106,6 +106,8 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	authed.GET("/executions", RequirePermission(authz.RunView), h.listExecutions)
 	authed.GET("/executions/:id", RequirePermission(authz.RunView), h.getExecution)
 	authed.GET("/connections", RequirePermission(authz.FlowView), h.listConnections)
+	// Version history read model — anyone who can view flows (E4-S2).
+	authed.GET("/flows/:id/versions", RequirePermission(authz.FlowView), h.listVersions)
 
 	// Audit trail read model — admin-only (docs/spec/07 §6). A permission gate
 	// would leak the trail to any role sharing that permission, so it is gated on
@@ -116,6 +118,11 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	authed.POST("/flows", RequirePermission(authz.FlowCreate), h.createFlow)
 	authed.PUT("/flows/:id/draft", RequirePermission(authz.FlowCreate), h.updateFlowDraft)
 	authed.POST("/flows/:id/publish", RequirePermission(authz.FlowPublish), h.publishFlow)
+	// Lifecycle transitions + rollback — publish-privileged (E4-S1/S2).
+	authed.POST("/flows/:id/pause", RequirePermission(authz.FlowPublish), h.pauseFlow)
+	authed.POST("/flows/:id/resume", RequirePermission(authz.FlowPublish), h.resumeFlow)
+	authed.POST("/flows/:id/stop", RequirePermission(authz.FlowPublish), h.stopFlow)
+	authed.POST("/flows/:id/rollback", RequirePermission(authz.FlowPublish), h.rollbackFlow)
 	authed.POST("/flows/:id/run", RequirePermission(authz.FlowRun), h.runFlow)
 	authed.POST("/connections", RequirePermission(authz.ConnectionManage), h.createConnection)
 	authed.PUT("/connections/:id", RequirePermission(authz.ConnectionManage), h.updateConnection)

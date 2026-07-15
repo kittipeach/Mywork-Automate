@@ -258,36 +258,92 @@ func (h *handlers) updateFlowDraft(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// publishFlow → POST /flows/{id}/publish → 200 the published flow. After the
-// store publishes, it syncs the flow's recurring schedule to the scheduler:
+// publishFlow → POST /flows/{id}/publish {changeNote} → 200 the published flow.
+// changeNote is mandatory (E4-S2: publish must carry a change note) — an empty
+// note is a 400. After the store publishes (bumping current_version), it snapshots
+// the current definition as an immutable version row (versionNo = the flow's new
+// current version), then syncs the flow's recurring schedule to the scheduler:
 // SpecFromDefinition compiles the definition, then Sync (when the flow has a
 // trigger.schedule node) or Delete (idempotent — the flow no longer schedules
-// itself). A scheduler/definition error does not fail the publish (it already
-// committed): it is logged at WARN and the published flow is still returned.
+// itself). A scheduler/version/definition error does not fail the publish (it
+// already committed): it is logged at WARN and the published flow is still returned.
 func (h *handlers) publishFlow(c *gin.Context) {
-	id := c.Param("id")
+	changeNote, ok := bindChangeNote(c)
+	if !ok {
+		return
+	}
+	flow, err := h.publish(c, c.Param("id"), changeNote, audit.ActionFlowPublish)
+	if err != nil {
+		return // publish already wrote the error envelope
+	}
+	c.JSON(http.StatusOK, flow)
+}
+
+// bindChangeNote decodes the mandatory {changeNote} body and writes a 400 error
+// envelope (returning ok=false) when the body is malformed or the note is empty.
+func bindChangeNote(c *gin.Context) (string, bool) {
+	var body struct {
+		ChangeNote string `json:"changeNote"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&body); err != nil {
+			errorEnvelope(c, http.StatusBadRequest, "bad_request", err.Error())
+			return "", false
+		}
+	}
+	if body.ChangeNote == "" {
+		errorEnvelope(c, http.StatusBadRequest, "bad_request", "changeNote is required")
+		return "", false
+	}
+	return body.ChangeNote, true
+}
+
+// publish commits the store publish, snapshots the definition as a new version,
+// audits the given action and syncs the schedule. It writes the error envelope
+// itself on failure (returning a non-nil error) so callers just return; on
+// success it returns the published flow summary. action lets rollback record
+// flow.rollback while normal publish records flow.publish.
+func (h *handlers) publish(c *gin.Context, id, changeNote, action string) (store.FlowSummary, error) {
 	ctx := c.Request.Context()
 
 	flow, err := h.store.PublishFlow(ctx, id)
 	if err != nil {
 		if store.IsNotFound(err) {
 			errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
-			return
+		} else {
+			errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 		}
-		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
-		return
+		return store.FlowSummary{}, err
 	}
 
 	h.record(c, audit.Entry{
-		Action:       audit.ActionFlowPublish,
+		Action:       action,
 		ResourceType: "flow",
 		ResourceID:   flow.ID,
-		Detail:       map[string]any{"version": flow.Version},
+		Detail:       map[string]any{"version": flow.Version, "changeNote": changeNote},
 	})
 
+	h.snapshotVersion(c, flow, changeNote)
 	h.syncSchedule(c, flow.ID)
 
-	c.JSON(http.StatusOK, flow)
+	return flow, nil
+}
+
+// snapshotVersion pins the flow's current definition as an immutable version row
+// (versionNo = the flow's post-publish current version, published_by = the caller
+// role). Any failure is non-fatal to publish — the store already committed — so it
+// is logged at WARN and swallowed (matching the schedule-sync policy).
+func (h *handlers) snapshotVersion(c *gin.Context, flow store.FlowSummary, changeNote string) {
+	ctx := c.Request.Context()
+
+	def, err := h.store.GetFlowDefinition(ctx, flow.ID)
+	if err != nil {
+		h.warn("publish: load definition for version snapshot failed", "flowId", flow.ID, "err", err)
+		return
+	}
+	if err := h.store.CreateVersion(ctx, flow.ID, flow.Version, def, changeNote, string(callerRole(c))); err != nil {
+		h.warn("publish: snapshot version failed", "flowId", flow.ID, "err", err)
+	}
 }
 
 // syncSchedule keeps flowID's recurring schedule in step with its published

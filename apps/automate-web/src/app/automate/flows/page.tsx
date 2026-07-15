@@ -3,13 +3,181 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Plus, Search, FolderOpen, X } from 'lucide-react';
+import {
+  Plus,
+  Search,
+  FolderOpen,
+  X,
+  Pause,
+  Play,
+  Square,
+  History,
+  RotateCcw,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
 import { TopBar } from '@/components/shell/TopBar';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/Badge';
-import { useFlows } from '@/api/hooks';
-import { useCreateFlow } from '@/api/mutations';
+import type { FlowSummary } from '@/lib/mock/store';
+import { useFlows, useVersions } from '@/api/hooks';
+import {
+  useCreateFlow,
+  usePauseFlow,
+  useResumeFlow,
+  useStopFlow,
+  useRollback,
+  ApiError,
+} from '@/api/mutations';
+import { availableLifecycleActions } from '@/lib/lifecycle';
+import { fmtDateTime } from '@/api/format';
+
+function lifecycleError(error: unknown): string | null {
+  if (!error) return null;
+  if (error instanceof ApiError && error.status === 409) {
+    return 'That action isn’t allowed for this flow’s current status.';
+  }
+  return 'Something went wrong. Please try again.';
+}
+
+const ACTION_META = {
+  pause: { label: 'Pause', Icon: Pause, variant: 'secondary' as const },
+  resume: { label: 'Resume', Icon: Play, variant: 'secondary' as const },
+  stop: { label: 'Stop', Icon: Square, variant: 'danger' as const },
+};
+
+function VersionsPanel({ flowId }: { flowId: string }) {
+  const { data, isLoading, isError } = useVersions(flowId);
+  const rollback = useRollback();
+  const versions = data?.versions ?? [];
+
+  const onRollback = (toVersion: number) => {
+    const changeNote =
+      typeof window !== 'undefined'
+        ? window.prompt(`Change note for rolling back to v${toVersion}`, `Rollback to v${toVersion}`)
+        : null;
+    if (changeNote == null) return;
+    rollback.mutate({ flowId, toVersion, changeNote });
+  };
+
+  const err = lifecycleError(rollback.error);
+
+  return (
+    <div className="bg-surface-sunken px-5 py-4">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-ink-subtle">
+        <History className="h-3.5 w-3.5" aria-hidden /> Version history
+      </div>
+      {isLoading && <p className="text-sm text-ink-muted">Loading versions…</p>}
+      {isError && <p className="text-sm text-ink-muted">Couldn’t load versions.</p>}
+      {!isLoading && !isError && versions.length === 0 && (
+        <p className="text-sm text-ink-muted">No published versions yet.</p>
+      )}
+      {versions.length > 0 && (
+        <ul className="divide-y divide-border rounded-md border border-border bg-surface">
+          {versions.map((v) => (
+            <li key={v.versionNo} className="flex items-center justify-between gap-4 px-4 py-2.5 text-sm">
+              <div className="min-w-0">
+                <span className="font-medium text-ink">v{v.versionNo}</span>{' '}
+                <span className="text-ink-muted">{v.changeNote}</span>
+                <div className="text-xs text-ink-subtle">
+                  {v.publishedBy} · {fmtDateTime(v.publishedAt)}
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onRollback(v.versionNo)}
+                disabled={rollback.isPending}
+                aria-label={`Roll back to v${v.versionNo}`}
+              >
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Rollback
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {err && <p className="mt-2 text-xs text-danger">{err}</p>}
+    </div>
+  );
+}
+
+function FlowRow({ flow }: { flow: FlowSummary }) {
+  const [expanded, setExpanded] = useState(false);
+  const pause = usePauseFlow();
+  const resume = useResumeFlow();
+  const stop = useStopFlow();
+
+  const runners = { pause, resume, stop };
+  const actions = availableLifecycleActions(flow.status);
+  const pending = pause.isPending || resume.isPending || stop.isPending;
+  const err =
+    lifecycleError(pause.error) ?? lifecycleError(resume.error) ?? lifecycleError(stop.error);
+
+  return (
+    <>
+      <tr className="group hover:bg-surface-sunken">
+        <td className="px-5 py-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setExpanded((e) => !e)}
+              aria-label={expanded ? `Hide versions of ${flow.name}` : `Show versions of ${flow.name}`}
+              aria-expanded={expanded}
+              className="text-ink-subtle hover:text-ink"
+            >
+              {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+            <Link href={`/automate/flows/${flow.id}`} className="font-medium text-ink group-hover:text-brand">
+              {flow.name}
+            </Link>
+          </div>
+        </td>
+        <td className="px-5 py-3">
+          <span className="inline-flex items-center gap-1.5 text-ink-muted">
+            <FolderOpen className="h-3.5 w-3.5" /> {flow.folder}
+          </span>
+        </td>
+        <td className="px-5 py-3"><StatusBadge status={flow.status} /></td>
+        <td className="px-5 py-3 text-ink-muted">{flow.version ? `v${flow.version}` : '—'}</td>
+        <td className="px-5 py-3">
+          {flow.lastRun ? (
+            <StatusBadge status={flow.lastRun.status} />
+          ) : (
+            <span className="text-ink-subtle">never</span>
+          )}
+        </td>
+        <td className="px-5 py-3">
+          <div className="flex items-center justify-end gap-1.5">
+            {actions.map((a) => {
+              const { label, Icon, variant } = ACTION_META[a];
+              return (
+                <Button
+                  key={a}
+                  size="sm"
+                  variant={variant}
+                  disabled={pending}
+                  onClick={() => runners[a].mutate(flow.id)}
+                  aria-label={`${label} ${flow.name}`}
+                >
+                  <Icon className="h-3.5 w-3.5" aria-hidden /> {label}
+                </Button>
+              );
+            })}
+          </div>
+          {err && <p className="mt-1 text-right text-xs text-danger">{err}</p>}
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={6} className="p-0">
+            <VersionsPanel flowId={flow.id} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
 
 export default function FlowsPage() {
   const router = useRouter();
@@ -130,33 +298,18 @@ export default function FlowsPage() {
                 <th className="px-5 py-3 font-medium">Status</th>
                 <th className="px-5 py-3 font-medium">Version</th>
                 <th className="px-5 py-3 font-medium">Last run</th>
+                <th className="px-5 py-3 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading && (
-                <tr><td colSpan={5} className="px-5 py-8 text-center text-ink-muted">Loading…</td></tr>
+                <tr><td colSpan={6} className="px-5 py-8 text-center text-ink-muted">Loading…</td></tr>
               )}
               {!isLoading && flows.length === 0 && (
-                <tr><td colSpan={5} className="px-5 py-8 text-center text-ink-muted">No flows match.</td></tr>
+                <tr><td colSpan={6} className="px-5 py-8 text-center text-ink-muted">No flows match.</td></tr>
               )}
               {flows.map((f) => (
-                <tr key={f.id} className="group hover:bg-surface-sunken">
-                  <td className="px-5 py-3">
-                    <Link href={`/automate/flows/${f.id}`} className="font-medium text-ink group-hover:text-brand">
-                      {f.name}
-                    </Link>
-                  </td>
-                  <td className="px-5 py-3">
-                    <span className="inline-flex items-center gap-1.5 text-ink-muted">
-                      <FolderOpen className="h-3.5 w-3.5" /> {f.folder}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3"><StatusBadge status={f.status} /></td>
-                  <td className="px-5 py-3 text-ink-muted">{f.version ? `v${f.version}` : '—'}</td>
-                  <td className="px-5 py-3">
-                    {f.lastRun ? <StatusBadge status={f.lastRun.status} /> : <span className="text-ink-subtle">never</span>}
-                  </td>
-                </tr>
+                <FlowRow key={f.id} flow={f} />
               ))}
             </tbody>
           </table>

@@ -76,13 +76,17 @@ type syncCall struct {
 	in     flowspec.FlowInput
 }
 
-// fakeScheduler records Sync/Delete calls. syncErr/deleteErr force the matching
-// method to fail so the "scheduler error is non-fatal to publish" path is covered.
+// fakeScheduler records Sync/Delete/Pause/Resume calls. The *Err fields force the
+// matching method to fail so the "scheduler error is non-fatal" paths are covered.
 type fakeScheduler struct {
 	syncs     []syncCall
 	deletes   []string
+	pauses    []string
+	resumes   []string
 	syncErr   error
 	deleteErr error
+	pauseErr  error
+	resumeErr error
 }
 
 func (f *fakeScheduler) Sync(_ context.Context, flowID string, spec scheduler.Spec, in flowspec.FlowInput) error {
@@ -93,8 +97,14 @@ func (f *fakeScheduler) Delete(_ context.Context, flowID string) error {
 	f.deletes = append(f.deletes, flowID)
 	return f.deleteErr
 }
-func (f *fakeScheduler) Pause(context.Context, string) error  { return nil }
-func (f *fakeScheduler) Resume(context.Context, string) error { return nil }
+func (f *fakeScheduler) Pause(_ context.Context, flowID string) error {
+	f.pauses = append(f.pauses, flowID)
+	return f.pauseErr
+}
+func (f *fakeScheduler) Resume(_ context.Context, flowID string) error {
+	f.resumes = append(f.resumes, flowID)
+	return f.resumeErr
+}
 
 // scheduleDef is a flow definition carrying a trigger.schedule node so
 // SpecFromDefinition reports hasSchedule == true.
@@ -156,7 +166,7 @@ func TestPublishFlow_RecordsPublish(t *testing.T) {
 	fake := seedFake()
 	fake.def = sampleDef() // no schedule node
 	r := routerWithDeps(fake, &fakeRunner{}, aud, &fakeScheduler{})
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -225,7 +235,7 @@ func TestPublish_WithSchedule_CallsSync(t *testing.T) {
 	sch := &fakeScheduler{}
 	r := routerWithDeps(fake, &fakeRunner{}, &fakeAudit{}, sch)
 
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", map[string]string{roleHeader: "designer"})
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, map[string]string{roleHeader: "designer"})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -256,7 +266,7 @@ func TestPublish_NoSchedule_CallsDelete(t *testing.T) {
 	sch := &fakeScheduler{}
 	r := routerWithDeps(fake, &fakeRunner{}, &fakeAudit{}, sch)
 
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -275,7 +285,7 @@ func TestPublish_SchedulerSyncError_StillPublishes(t *testing.T) {
 	sch := &fakeScheduler{syncErr: errors.New("temporal unreachable")}
 	r := routerWithDeps(fake, &fakeRunner{}, &fakeAudit{}, sch)
 
-	w, body := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, body := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 despite scheduler error", w.Code)
 	}
@@ -294,7 +304,7 @@ func TestPublish_BadScheduleConfig_StillPublishes(t *testing.T) {
 	sch := &fakeScheduler{}
 	r := routerWithDeps(fake, &fakeRunner{}, &fakeAudit{}, sch)
 
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -310,7 +320,7 @@ func TestPublish_DefinitionLoadError_StillPublishes(t *testing.T) {
 	sch := &fakeScheduler{}
 	r := routerWithDeps(fake, &fakeRunner{}, &fakeAudit{}, sch)
 
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -420,7 +430,7 @@ func TestPublish_SchedulerError_WithLogger_Warns(t *testing.T) {
 	fake.def = scheduleDef()
 	sch := &fakeScheduler{syncErr: errors.New("temporal down")}
 	r := routerWithLogger(fake, &fakeRunner{}, &fakeAudit{}, sch)
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -433,7 +443,7 @@ func TestPublish_SchedulerDeleteError_WithLogger_Warns(t *testing.T) {
 	fake.def = sampleDef()
 	sch := &fakeScheduler{deleteErr: errors.New("temporal down")}
 	r := routerWithLogger(fake, &fakeRunner{}, &fakeAudit{}, sch)
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -445,7 +455,7 @@ func TestPublish_DefLoadError_WithLogger_Warns(t *testing.T) {
 	fake := seedFake()
 	fake.errDef = errors.New("def boom")
 	r := routerWithLogger(fake, &fakeRunner{}, &fakeAudit{}, &fakeScheduler{})
-	w, _ := doReq(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", nil)
+	w, _ := doReqBody(t, r, http.MethodPost, APIBasePath+"/flows/flw_payroll/publish", `{"changeNote":"note"}`, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}

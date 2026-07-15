@@ -69,11 +69,19 @@ export default function FlowEditorPage() {
 
   const handlePublish = () => {
     if (!id || publishFlow.isPending) return;
-    publishFlow.mutate(id, {
-      onSuccess: (flow) =>
-        setBanner({ tone: 'success', title: `Published ${flow.name} (v${flow.version})` }),
-      onError: () => setBanner({ tone: 'danger', title: 'Failed to publish flow' }),
-    });
+    // The API now records a change note on every publish. Keep it minimal — a
+    // prompt — until a richer publish dialog lands.
+    const changeNote =
+      typeof window !== 'undefined' ? window.prompt('Change note for this version', '') : '';
+    if (changeNote == null) return; // cancelled
+    publishFlow.mutate(
+      { flowId: id, changeNote },
+      {
+        onSuccess: (flow) =>
+          setBanner({ tone: 'success', title: `Published ${flow.name} (v${flow.version})` }),
+        onError: () => setBanner({ tone: 'danger', title: 'Failed to publish flow' }),
+      },
+    );
   };
 
   return (
