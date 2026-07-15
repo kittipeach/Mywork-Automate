@@ -36,6 +36,11 @@ type fakeStore struct {
 	finished   []finishCall
 	errWrite   error // non-notfound error from any write method
 
+	// execution-control state/hooks (E5-S5)
+	execStatusSets     []statusSet
+	errSetExecStatus   error // non-notfound error from SetExecutionStatus
+	execStatusNotFound bool  // force SetExecutionStatus to report NotFound
+
 	// lifecycle + versioning state/hooks (E4-S1/S2)
 	statusSets       []statusSet
 	versionsCreated  []versionCreate
@@ -193,7 +198,7 @@ func intersects(a, b []string) bool {
 }
 
 func newTestRouter(st store.Store) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil, nil, nil, AuthConfig{})
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil, nil, nil, AuthConfig{}, nil)
 }
 
 // doReq performs a request with optional headers and returns the recorder plus

@@ -9,9 +9,11 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/nodes"
+	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
+	"github.com/mywork/automate/pkg/masking"
 )
 
 // defaultRole is assumed when the caller sends no X-Role header. admin sees all
@@ -40,6 +42,15 @@ type handlers struct {
 	audit  audit.Service
 	sched  scheduler.Scheduler
 	log    *slog.Logger
+
+	// querier backs the query-preview and schema endpoints (E6-S4/E6-S2). It is
+	// the seam over the database: in production it is the API's pgx pool (see the
+	// note in the preview package on per-connection pools for production); in
+	// tests it is a fake. nil when no pool is configured — the endpoints then 503.
+	querier preview.Querier
+	// mask is the masking engine applied to preview results at the preview point.
+	// Never nil once NewRouter has built it from masking.DefaultRules().
+	mask *masking.Engine
 }
 
 // record appends one audit entry after a mutating action has already succeeded.

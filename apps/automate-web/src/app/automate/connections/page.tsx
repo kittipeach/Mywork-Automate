@@ -1,11 +1,15 @@
 'use client';
 
-import { Database, Server, Mail, Send, Plus, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { Database, Server, Mail, Send, Plus, ShieldCheck, Loader2 } from 'lucide-react';
 import { TopBar } from '@/components/shell/TopBar';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { useToast } from '@/components/ui/Toast';
 import { useConnections } from '@/api/hooks';
+import { useTestConnection } from '@/api/connections';
+import { ConnectionFormModal } from '@/features/connections/ConnectionFormModal';
 import type { Connection } from '@/lib/mock/store';
 
 const ICON: Record<Connection['type'], any> = { postgres: Database, sftp: Send, smtp: Mail, graph: Server };
@@ -13,11 +17,40 @@ const ICON: Record<Connection['type'], any> = { postgres: Database, sftp: Send, 
 export default function ConnectionsPage() {
   const { data } = useConnections();
   const connections = data?.connections ?? [];
+  const { toast } = useToast();
+  const test = useTestConnection();
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<Connection | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+
+  const openCreate = () => {
+    setEditing(null);
+    setModalOpen(true);
+  };
+  const openEdit = (c: Connection) => {
+    setEditing(c);
+    setModalOpen(true);
+  };
+
+  const onTest = (c: Connection) => {
+    setTestingId(c.id);
+    test.mutate(c.id, {
+      onSuccess: () => toast('success', `${c.name}: connection OK`),
+      onError: () => toast('error', `${c.name}: connection test failed`),
+      onSettled: () => setTestingId(null),
+    });
+  };
+
   return (
     <>
       <TopBar
         title="Connections"
-        actions={<Button size="sm"><Plus className="h-4 w-4" /> New connection</Button>}
+        actions={
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="h-4 w-4" /> New connection
+          </Button>
+        }
       />
       <main className="flex-1 overflow-auto p-6">
         <p className="mb-4 max-w-2xl text-sm text-ink-muted">
@@ -53,8 +86,18 @@ export default function ConnectionsPage() {
                     ))}
                   </div>
                   <div className="mt-4 flex gap-2">
-                    <Button size="sm" variant="secondary">Test</Button>
-                    <Button size="sm" variant="ghost">Edit</Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => onTest(c)}
+                      disabled={testingId === c.id}
+                    >
+                      {testingId === c.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Test
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => openEdit(c)}>
+                      Edit
+                    </Button>
                   </div>
                 </CardBody>
               </Card>
@@ -62,6 +105,8 @@ export default function ConnectionsPage() {
           })}
         </div>
       </main>
+
+      <ConnectionFormModal open={modalOpen} onClose={() => setModalOpen(false)} connection={editing} />
     </>
   );
 }

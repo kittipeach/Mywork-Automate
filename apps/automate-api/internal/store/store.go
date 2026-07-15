@@ -143,6 +143,9 @@ type Store interface {
 	// FinishExecution updates an execution's terminal status+duration and inserts
 	// its ordered steps in one transaction.
 	FinishExecution(ctx context.Context, id, status string, durationMs int64, steps []ExecutionStep) error
+	// SetExecutionStatus updates only an execution's status (e.g. "cancelled").
+	// ErrNotFound when the execution is unknown.
+	SetExecutionStatus(ctx context.Context, id, status string) error
 
 	// CreateFlow inserts a new draft flow (version 0, no definition) and returns
 	// its summary.

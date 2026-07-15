@@ -47,28 +47,54 @@ func (h *handlers) runFlow(c *gin.Context) {
 	}
 
 	id := c.Param("id")
+
+	def, flow, ok := h.loadRunnable(c, id)
+	if !ok {
+		return
+	}
+
+	execID, ok := h.startRun(c, def, flow, body.Params)
+	if !ok {
+		return
+	}
+
+	h.record(c, audit.Entry{
+		Action:       audit.ActionExecutionManualRun,
+		ResourceType: "flow",
+		ResourceID:   flow.ID,
+		Detail:       map[string]any{"executionId": execID},
+	})
+
+	c.JSON(http.StatusAccepted, gin.H{"executionId": execID})
+}
+
+// loadRunnable loads a flow's runnable definition and summary, writing the
+// appropriate error envelope and returning ok=false on any failure (404 when the
+// flow is unknown or has no definition, 500 otherwise). It is shared by runFlow
+// and retryExecution.
+func (h *handlers) loadRunnable(c *gin.Context, id string) (flowspec.FlowDef, store.FlowSummary, bool) {
 	ctx := c.Request.Context()
 
 	def, err := h.store.GetFlowDefinition(ctx, id)
 	if err != nil {
-		if store.IsNotFound(err) {
-			errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
-			return
-		}
-		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
-		return
+		h.writeStoreError(c, err)
+		return flowspec.FlowDef{}, store.FlowSummary{}, false
 	}
 
 	flow, err := h.store.GetFlow(ctx, id)
 	if err != nil {
-		if store.IsNotFound(err) {
-			errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
-			return
-		}
-		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
-		return
+		h.writeStoreError(c, err)
+		return flowspec.FlowDef{}, store.FlowSummary{}, false
 	}
+	return def, flow, true
+}
 
+// startRun records a "running" execution, hands the run to the Runner and wires
+// the onDone finaliser (mirroring the terminal outcome via FinishExecution). It
+// writes the error envelope and returns ok=false on failure. The returned execID
+// is the new execution id. Shared by runFlow (manual run) and retryExecution.
+func (h *handlers) startRun(c *gin.Context, def flowspec.FlowDef, flow store.FlowSummary, params map[string]any) (string, bool) {
+	ctx := c.Request.Context()
 	role := string(callerRole(c))
 
 	startedAt := time.Now()
@@ -84,13 +110,13 @@ func (h *handlers) runFlow(c *gin.Context) {
 	}
 	if err := h.store.CreateExecution(ctx, exec); err != nil {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
-		return
+		return "", false
 	}
 
 	in := flowspec.FlowInput{
 		Flow:        def,
 		ViewerRoles: []string{role},
-		Params:      body.Params,
+		Params:      params,
 	}
 
 	// onDone records the terminal outcome. It runs in the caller's goroutine for
@@ -108,17 +134,19 @@ func (h *handlers) runFlow(c *gin.Context) {
 
 	if err := h.runner.Run(ctx, execID, in, onDone); err != nil {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
+		return "", false
+	}
+	return execID, true
+}
+
+// writeStoreError maps a store error to the standard envelope: 404 for NotFound,
+// 500 otherwise.
+func (h *handlers) writeStoreError(c *gin.Context, err error) {
+	if store.IsNotFound(err) {
+		errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
 		return
 	}
-
-	h.record(c, audit.Entry{
-		Action:       audit.ActionExecutionManualRun,
-		ResourceType: "flow",
-		ResourceID:   flow.ID,
-		Detail:       map[string]any{"executionId": execID},
-	})
-
-	c.JSON(http.StatusAccepted, gin.H{"executionId": execID})
+	errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 }
 
 // buildSteps maps a FlowResult into execution steps. Each executed node in

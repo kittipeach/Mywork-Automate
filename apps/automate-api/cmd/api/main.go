@@ -18,6 +18,7 @@ import (
 	auditpg "github.com/mywork/automate/apps/automate-api/internal/audit/postgres"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
+	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store/postgres"
@@ -147,9 +148,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Query preview + schema introspection run against a pgx pool behind the
+	// preview.Querier seam. For the demo this reuses the API's own pool; a
+	// production build would resolve each connection's credentials from Key Vault
+	// (pkg/secrets) and build a dedicated, least-privilege pool per connection.
+	querier := preview.PoolQuerier{Pool: pool}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg),
+		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg, querier),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

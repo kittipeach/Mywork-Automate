@@ -14,11 +14,13 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
+	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/pkg/authz"
+	"github.com/mywork/automate/pkg/masking"
 )
 
 // APIBasePath is the versioned control-plane prefix (docs/spec/06 §2).
@@ -43,13 +45,23 @@ type AuthConfig struct {
 // sync — both must be non-nil (the composition root passes audit.NewNoop() /
 // scheduler.Noop{} when the backend is unavailable). authCfg wires local login +
 // RBAC role resolution; pass a zero AuthConfig to run without local auth (X-Role
-// / defaultRole fallback).
-func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig) *gin.Engine {
+// / defaultRole fallback). querier backs the query-preview and schema endpoints
+// (E6-S4/E6-S2) — the composition root passes preview.PoolQuerier over the API's
+// pgx pool; nil disables those endpoints (they then 503).
+func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig, querier preview.Querier) *gin.Engine {
 	if auditSvc == nil {
 		auditSvc = audit.NewNoop()
 	}
 	if sched == nil {
 		sched = scheduler.Noop{}
+	}
+
+	// The masking engine uses the security-reviewed default rule set; its patterns
+	// are constant so compilation can never fail at runtime — panic if it somehow
+	// does rather than serve unmasked previews.
+	maskEng, err := masking.NewEngine(masking.DefaultRules())
+	if err != nil {
+		panic("httpapi: masking engine build failed: " + err.Error())
 	}
 
 	r := gin.New()
@@ -63,7 +75,7 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "env": cfg.Env})
 	})
 
-	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger}
+	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger, querier: querier, mask: maskEng}
 
 	deps := authDeps{service: authCfg.Service, audit: auditSvc}
 	if authCfg.Logger != nil {
@@ -124,10 +136,18 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	authed.POST("/flows/:id/stop", RequirePermission(authz.FlowPublish), h.stopFlow)
 	authed.POST("/flows/:id/rollback", RequirePermission(authz.FlowPublish), h.rollbackFlow)
 	authed.POST("/flows/:id/run", RequirePermission(authz.FlowRun), h.runFlow)
+	// Execution control (E5-S5): cancel an in-flight run, or re-run a past one.
+	// Both are run-privileged (FlowRun).
+	authed.POST("/executions/:id/cancel", RequirePermission(authz.FlowRun), h.cancelExecution)
+	authed.POST("/executions/:id/retry", RequirePermission(authz.FlowRun), h.retryExecution)
 	authed.POST("/connections", RequirePermission(authz.ConnectionManage), h.createConnection)
 	authed.PUT("/connections/:id", RequirePermission(authz.ConnectionManage), h.updateConnection)
 	authed.DELETE("/connections/:id", RequirePermission(authz.ConnectionManage), h.deleteConnection)
 	authed.POST("/connections/:id/test", RequirePermission(authz.ConnectionManage), h.testConnection)
+	// Query preview (E6-S4) + schema metadata (E6-S2): read-only introspection of
+	// a connection's database. Gated on FlowView (anyone who can design flows).
+	authed.POST("/connections/:id/query-preview", RequirePermission(authz.FlowView), h.queryPreview)
+	authed.GET("/connections/:id/schema", RequirePermission(authz.FlowView), h.connectionSchema)
 
 	return r
 }

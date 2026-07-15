@@ -35,6 +35,27 @@ export async function poster<T>(path: string, body: unknown = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * Generic verbed request helper for the mutations poster doesn't cover (PUT for
+ * updates, DELETE for removals). Same auth + error contract as `poster`. A 204
+ * No Content (typical for DELETE) has no body, so it resolves to `undefined`
+ * rather than trying to parse empty JSON.
+ */
+export async function request<T>(
+  method: 'PUT' | 'DELETE',
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { 'content-type': 'application/json', ...authHeader() },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, path);
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
 export type RunFlowResult = { executionId: string };
 export type CreateFlowInput = { name: string; folder: string };
 

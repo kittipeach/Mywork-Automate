@@ -329,6 +329,20 @@ func (s *Store) FinishExecution(ctx context.Context, id, status string, duration
 	return nil
 }
 
+// SetExecutionStatus updates only an execution's status (e.g. "cancelled").
+// ErrNotFound when the execution is unknown.
+func (s *Store) SetExecutionStatus(ctx context.Context, id, status string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE executions SET status = $2 WHERE id = $1`, id, status)
+	if err != nil {
+		return fmt.Errorf("postgres: set execution status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("execution not found: " + id)
+	}
+	return nil
+}
+
 // CreateFlow inserts a new draft flow (version 0, no definition) and returns it.
 func (s *Store) CreateFlow(ctx context.Context, name, folder string) (store.FlowSummary, error) {
 	f := store.FlowSummary{

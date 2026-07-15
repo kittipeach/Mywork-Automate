@@ -3,23 +3,78 @@
 // Run detail drill-down (E7). Fetches a single execution and renders a header
 // summary plus a per-step timeline table: node name, type, status, duration,
 // input→output row counts, and any error (red). Loading + not-found states.
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Ban, RotateCw, Loader2 } from 'lucide-react';
 import { TopBar } from '@/components/shell/TopBar';
 import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/Badge';
+import { useToast } from '@/components/ui/Toast';
 import { useExecution } from '@/api/hooks';
+import { ApiError } from '@/api/mutations';
+import {
+  useCancelExecution,
+  useRetryExecution,
+  canCancel,
+  canRetry,
+} from '@/api/executions';
 import { fmtDuration, fmtDateTime, stepDotColor } from '@/api/format';
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? '';
+  const router = useRouter();
+  const { toast } = useToast();
   const { data: run, isLoading, isError } = useExecution(id);
+
+  const cancel = useCancelExecution();
+  const retry = useRetryExecution();
+
+  const onCancel = () =>
+    cancel.mutate(id, {
+      onSuccess: () => toast('success', 'Run cancelled'),
+      onError: (err) =>
+        toast(
+          'error',
+          err instanceof ApiError && err.status === 409
+            ? 'Run already finished — nothing to cancel'
+            : 'Could not cancel run',
+        ),
+    });
+
+  const onRetry = () =>
+    retry.mutate(id, {
+      onSuccess: (data) => {
+        toast('success', 'Re-run started');
+        router.push(`/automate/runs/${data.executionId}`);
+      },
+      onError: () => toast('error', 'Could not start re-run'),
+    });
 
   return (
     <>
-      <TopBar title="Run detail" />
+      <TopBar
+        title="Run detail"
+        actions={
+          run ? (
+            <div className="flex items-center gap-2">
+              {canCancel(run.status) && (
+                <Button size="sm" variant="secondary" onClick={onCancel} disabled={cancel.isPending}>
+                  {cancel.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ban className="h-4 w-4" />}
+                  Cancel
+                </Button>
+              )}
+              {canRetry(run.status) && (
+                <Button size="sm" onClick={onRetry} disabled={retry.isPending}>
+                  {retry.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCw className="h-4 w-4" />}
+                  Re-run
+                </Button>
+              )}
+            </div>
+          ) : undefined
+        }
+      />
       <main className="flex-1 overflow-auto p-6">
         <Link
           href="/automate/runs"

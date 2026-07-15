@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/Badge';
 import { cn } from '@/lib/cn';
 import { SchemaForm } from '@/features/node-config';
+import { QueryPanel } from '@/features/connections/QueryPanel';
 import { nodeIcon } from './nodeIcons';
 import { useFlowStore } from './store';
 
@@ -71,6 +72,17 @@ export function ConfigPanel() {
             value={config}
             onChange={(v) => setNodeConfig(selectedNodeId, v)}
           />
+        )}
+
+        {node.data.nodeType === 'db.query' && (
+          <div className="mt-4 border-t border-border pt-4">
+            <QueryPanel
+              connectionId={(config?.connectionId as string) ?? ''}
+              sql={(config?.sql as string) ?? ''}
+              maxRows={(config?.maxRows as number) ?? 100}
+              onSqlChange={(sql) => setNodeConfig(selectedNodeId, { ...(config ?? {}), sql })}
+            />
+          </div>
         )}
       </div>
     </aside>

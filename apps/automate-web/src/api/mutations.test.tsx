@@ -11,6 +11,7 @@ import {
   useStopFlow,
   useRollback,
   poster,
+  request,
   ApiError,
 } from './mutations';
 import { setToken, clearToken } from '@/lib/token';
@@ -82,6 +83,42 @@ describe('poster', () => {
     const headers = fetchMock.mock.calls[0][1].headers;
     expect(headers.authorization).toBe('Bearer tok_xyz');
     expect(headers['content-type']).toBe('application/json');
+  });
+});
+
+describe('request', () => {
+  it('PUTs JSON and parses the body', async () => {
+    fetchMock.mockReturnValueOnce(respond(200, { id: 'x' }));
+    const out = await request<{ id: string }>('PUT', '/thing/x', { a: 1 });
+    expect(out).toEqual({ id: 'x' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/automate/v1/thing/x');
+    expect(init.method).toBe('PUT');
+    expect(init.headers['content-type']).toBe('application/json');
+    expect(init.body).toBe(JSON.stringify({ a: 1 }));
+  });
+
+  it('DELETEs with no body and resolves undefined on a 204', async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({ ok: true, status: 204, json: () => Promise.reject(new Error('no body')) } as unknown as Response),
+    );
+    const out = await request('DELETE', '/thing/x');
+    expect(out).toBeUndefined();
+    expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
+  });
+
+  it('throws an ApiError carrying the status on a non-2xx response', async () => {
+    fetchMock.mockReturnValueOnce(respond(404, {}));
+    const err = (await request('PUT', '/thing/x', {}).catch((e) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it('attaches Authorization: Bearer <token> when a token is set', async () => {
+    setToken('tok_put');
+    fetchMock.mockReturnValueOnce(respond(200, {}));
+    await request('PUT', '/thing/x', {});
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('Bearer tok_put');
   });
 });
 

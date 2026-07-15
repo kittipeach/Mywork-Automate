@@ -26,9 +26,10 @@ fi
 #   /audit/postgres/ — real-Postgres audit store, `integration`-tested
 #   /runner/         — Temporal-client run adapter, exercised at runtime
 #   scheduler/temporal.go — Temporal ScheduleClient adapter, exercised at runtime
+#   preview/pool.go  — pgx preview/schema adapter, `integration`-tested
 # Build a filtered profile that keeps the mode header.
 FILTERED=coverage.filtered.out
-grep -vE '/cmd/|/pgxquerier/|/store/postgres/|/audit/postgres/|/runner/|/scheduler/temporal\.go' coverage.out > "$FILTERED"
+grep -vE '/cmd/|/pgxquerier/|/store/postgres/|/audit/postgres/|/runner/|/scheduler/temporal\.go|/preview/pool\.go' coverage.out > "$FILTERED"
 
 # Per-PACKAGE statement coverage from the raw profile (CLAUDE.md rule 2:
 # "pkg/*, internal/* other ≥ 95%" is a package-level bar; the four critical

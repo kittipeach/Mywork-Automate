@@ -18,9 +18,11 @@ import (
 // the workflow completes — for the Temporal implementation that happens on a
 // background goroutine, so Run returns as soon as the run is accepted. A nil
 // error from Run means the run was accepted (the handler replies 202); onDone
-// then carries the eventual success/failure.
+// then carries the eventual success/failure. Cancel requests cancellation of an
+// in-flight run identified by its execution id (the Temporal workflow id).
 type Runner interface {
 	Run(ctx context.Context, executionID string, in flowspec.FlowInput, onDone func(flowspec.FlowResult, error)) error
+	Cancel(ctx context.Context, executionID string) error
 }
 
 // temporalRunner is the production Runner backed by a Temporal client.
@@ -49,5 +51,17 @@ func (r *temporalRunner) Run(ctx context.Context, executionID string, in flowspe
 		getErr := we.Get(context.Background(), &res)
 		onDone(res, getErr)
 	}()
+	return nil
+}
+
+// Cancel requests cancellation of the workflow whose id is executionID. An empty
+// run id targets the currently-running run of that workflow id. A workflow that
+// is already closed (completed/failed/cancelled) surfaces as an error from
+// Temporal; the handler guards the terminal case before calling Cancel so this
+// path is reached only for in-flight runs.
+func (r *temporalRunner) Cancel(ctx context.Context, executionID string) error {
+	if err := r.client.CancelWorkflow(ctx, executionID, ""); err != nil {
+		return fmt.Errorf("runner: cancel workflow: %w", err)
+	}
 	return nil
 }

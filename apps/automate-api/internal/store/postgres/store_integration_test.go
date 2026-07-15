@@ -265,6 +265,30 @@ func TestIntegration_SetFlowStatus(t *testing.T) {
 	}
 }
 
+// TestIntegration_SetExecutionStatus flips a seeded execution's status and
+// verifies the round-trip plus the NotFound path (E5-S5 cancel).
+func TestIntegration_SetExecutionStatus(t *testing.T) {
+	ctx := context.Background()
+	pool, s := freshPool(t, ctx)
+	defer pool.Close()
+
+	// exe_1003 is the seeded running execution.
+	if err := s.SetExecutionStatus(ctx, "exe_1003", "cancelled"); err != nil {
+		t.Fatalf("set exec status: %v", err)
+	}
+	e, err := s.GetExecution(ctx, "exe_1003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Status != "cancelled" {
+		t.Fatalf("status = %q, want cancelled", e.Status)
+	}
+
+	if err := s.SetExecutionStatus(ctx, "nope", "cancelled"); !store.IsNotFound(err) {
+		t.Fatalf("missing exec err = %v, want NotFound", err)
+	}
+}
+
 // TestIntegration_Versioning exercises CreateVersion → ListVersions (newest
 // first) → GetVersionDefinition round-trip against the real flow_versions table
 // (migration 0004).

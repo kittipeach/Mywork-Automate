@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
+	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
@@ -55,6 +56,22 @@ func (f *fakeStore) CreateExecution(_ context.Context, e store.Execution) error 
 
 func (f *fakeStore) FinishExecution(_ context.Context, id, status string, durationMs int64, steps []store.ExecutionStep) error {
 	f.finished = append(f.finished, finishCall{id: id, status: status, durationMs: durationMs, steps: steps})
+	return nil
+}
+
+func (f *fakeStore) SetExecutionStatus(_ context.Context, id, status string) error {
+	if f.errSetExecStatus != nil {
+		return f.errSetExecStatus
+	}
+	if f.execStatusNotFound {
+		return store.NewNotFound("execution not found: " + id)
+	}
+	f.execStatusSets = append(f.execStatusSets, statusSet{id: id, status: status})
+	for i := range f.execs {
+		if f.execs[i].ID == id {
+			f.execs[i].Status = status
+		}
+	}
 	return nil
 }
 
@@ -185,10 +202,12 @@ func (f *fakeStore) DeleteConnection(_ context.Context, id string) error {
 // --- fake Runner: invokes onDone synchronously so recording is deterministic ---
 
 type fakeRunner struct {
-	result   flowspec.FlowResult
-	runErr   error // error delivered via onDone (workflow failed)
-	startErr error // error returned from Run (failed to start)
-	started  int
+	result    flowspec.FlowResult
+	runErr    error // error delivered via onDone (workflow failed)
+	startErr  error // error returned from Run (failed to start)
+	started   int
+	cancelled []string // execution ids passed to Cancel
+	cancelErr error    // error returned from Cancel
 }
 
 func (r *fakeRunner) Run(_ context.Context, _ string, _ flowspec.FlowInput, onDone func(flowspec.FlowResult, error)) error {
@@ -200,15 +219,29 @@ func (r *fakeRunner) Run(_ context.Context, _ string, _ flowspec.FlowInput, onDo
 	return nil
 }
 
+func (r *fakeRunner) Cancel(_ context.Context, executionID string) error {
+	if r.cancelErr != nil {
+		return r.cancelErr
+	}
+	r.cancelled = append(r.cancelled, executionID)
+	return nil
+}
+
 func routerWithRunner(st store.Store, run runner.Runner) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{})
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, nil)
 }
 
 // routerWithDeps builds a router with an explicit audit.Service and Scheduler so
 // the audit/scheduler wiring can be asserted. A nil auditSvc/sched falls back to
 // the Noop implementations inside NewRouter.
 func routerWithDeps(st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, auditSvc, sched, AuthConfig{})
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, auditSvc, sched, AuthConfig{}, nil)
+}
+
+// routerWithQuerier builds a router with an injected preview querier so the
+// query-preview and schema endpoints can be exercised with a fake pool.
+func routerWithQuerier(st store.Store, run runner.Runner, q preview.Querier) http.Handler {
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, q)
 }
 
 // --- tests ---
