@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
+	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/flowspec"
@@ -129,7 +130,24 @@ func (h *handlers) startRun(c *gin.Context, def flowspec.FlowDef, flow store.Flo
 		if runErr != nil {
 			status = "failed"
 		}
-		_ = h.store.FinishExecution(context.Background(), execID, status, durationMs, steps)
+		ctx := context.Background()
+		_ = h.store.FinishExecution(ctx, execID, status, durationMs, steps)
+
+		// E5-S6: on a failed run, alert the flow's configured recipients. Delivery
+		// is best-effort — a notify error must not affect the run's recording, so
+		// it is logged at WARN and swallowed. No recipients => no-op notifier.
+		if runErr != nil {
+			if recipients := failureRecipients(def); len(recipients) > 0 {
+				if err := h.notifier.RunFailed(ctx, notify.FailureNotice{
+					FlowName:    flow.Name,
+					ExecutionID: execID,
+					Error:       runErr.Error(),
+					Recipients:  recipients,
+				}); err != nil {
+					h.warn("run-failure notify failed", "executionId", execID, "err", err)
+				}
+			}
+		}
 	}
 
 	if err := h.runner.Run(ctx, execID, in, onDone); err != nil {
@@ -137,6 +155,16 @@ func (h *handlers) startRun(c *gin.Context, def flowspec.FlowDef, flow store.Flo
 		return "", false
 	}
 	return execID, true
+}
+
+// failureRecipients returns the flow's configured run-failure email recipients
+// (E5-S6), reading def.Settings.Notification.FailureEmails nil-safely. Any
+// missing level of the settings tree yields nil (no recipients → no email).
+func failureRecipients(def flowspec.FlowDef) []string {
+	if def.Settings == nil || def.Settings.Notification == nil {
+		return nil
+	}
+	return def.Settings.Notification.FailureEmails
 }
 
 // writeStoreError maps a store error to the standard envelope: 404 for NotFound,

@@ -198,7 +198,7 @@ func intersects(a, b []string) bool {
 }
 
 func newTestRouter(st store.Store) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil, nil, nil, AuthConfig{}, nil)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, nil, nil, nil, AuthConfig{}, nil, nil)
 }
 
 // doReq performs a request with optional headers and returns the recorder plus

@@ -25,7 +25,7 @@ import (
 func routerWithLogger(st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal},
-		st, run, auditSvc, sched, AuthConfig{Logger: logger}, nil)
+		st, run, auditSvc, sched, AuthConfig{Logger: logger}, nil, nil)
 }
 
 // --- fakes ---

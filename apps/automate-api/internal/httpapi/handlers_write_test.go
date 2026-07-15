@@ -3,12 +3,14 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
+	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
@@ -228,20 +230,26 @@ func (r *fakeRunner) Cancel(_ context.Context, executionID string) error {
 }
 
 func routerWithRunner(st store.Store, run runner.Runner) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, nil)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, nil, nil)
 }
 
 // routerWithDeps builds a router with an explicit audit.Service and Scheduler so
 // the audit/scheduler wiring can be asserted. A nil auditSvc/sched falls back to
 // the Noop implementations inside NewRouter.
 func routerWithDeps(st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, auditSvc, sched, AuthConfig{}, nil)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, auditSvc, sched, AuthConfig{}, nil, nil)
 }
 
 // routerWithQuerier builds a router with an injected preview querier so the
 // query-preview and schema endpoints can be exercised with a fake pool.
 func routerWithQuerier(st store.Store, run runner.Runner, q preview.Querier) http.Handler {
-	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, q)
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, q, nil)
+}
+
+// routerWithNotifier builds a router with an injected Notifier so the
+// run-failure notification wiring (E5-S6) can be asserted from onDone.
+func routerWithNotifier(st store.Store, run runner.Runner, n notify.Notifier) http.Handler {
+	return NewRouter(config.Config{Env: config.EnvDev, FileStore: config.FileStoreLocal}, st, run, nil, nil, AuthConfig{}, nil, n)
 }
 
 // --- tests ---
@@ -402,5 +410,142 @@ func TestConnectionCRUD(t *testing.T) {
 	wt, tb := doReq(t, r, http.MethodPost, "/api/automate/v1/connections/conn_hr/test", nil)
 	if wt.Code != http.StatusOK || tb["status"] != "ok" {
 		t.Fatalf("test = %d %v", wt.Code, tb["status"])
+	}
+}
+
+// --- E5-S6: run-failure notifications wired into onDone ---
+
+// fakeNotifier records every RunFailed call so the onDone wiring can be asserted,
+// and can be primed to return an error (proving a notify failure is non-fatal).
+type fakeNotifier struct {
+	calls []notify.FailureNotice
+	err   error
+}
+
+func (n *fakeNotifier) RunFailed(_ context.Context, in notify.FailureNotice) error {
+	n.calls = append(n.calls, in)
+	return n.err
+}
+
+// defWithFailureEmails is sampleDef plus a per-flow failure-recipient list
+// (flowspec Settings.Notification.FailureEmails).
+func defWithFailureEmails(emails ...string) flowspec.FlowDef {
+	def := sampleDef()
+	def.Settings = &flowspec.Settings{
+		Notification: &flowspec.NotificationSettings{FailureEmails: emails},
+	}
+	return def
+}
+
+func TestRunFlow_Failed_NotifiesConfiguredRecipients(t *testing.T) {
+	fake := seedFake()
+	fake.def = defWithFailureEmails("ops@mywork.local", "oncall@mywork.local")
+	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1"}}, runErr: context.DeadlineExceeded}
+	notifier := &fakeNotifier{}
+	r := routerWithNotifier(fake, run, notifier)
+
+	w, _ := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/run", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected exactly one RunFailed call, got %d", len(notifier.calls))
+	}
+	got := notifier.calls[0]
+	if got.FlowName != "Payroll → Bank MFT" {
+		t.Errorf("flow name = %q, want the flow's name", got.FlowName)
+	}
+	if got.Error != context.DeadlineExceeded.Error() {
+		t.Errorf("error = %q, want the run error message", got.Error)
+	}
+	if len(got.Recipients) != 2 || got.Recipients[0] != "ops@mywork.local" || got.Recipients[1] != "oncall@mywork.local" {
+		t.Errorf("recipients = %v, want the def's FailureEmails", got.Recipients)
+	}
+	// The execution id notified must be the one recorded as running.
+	if len(fake.created) != 1 || got.ExecutionID != fake.created[0].ID {
+		t.Errorf("notified execID = %q, want the created execution id", got.ExecutionID)
+	}
+}
+
+func TestRunFlow_Success_DoesNotNotify(t *testing.T) {
+	fake := seedFake()
+	fake.def = defWithFailureEmails("ops@mywork.local")
+	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1", "q1"}}} // no runErr → success
+	notifier := &fakeNotifier{}
+	r := routerWithNotifier(fake, run, notifier)
+
+	w, _ := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/run", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(notifier.calls) != 0 {
+		t.Fatalf("a successful run must not notify, got %d calls", len(notifier.calls))
+	}
+}
+
+func TestRunFlow_Failed_NoNotificationSettings_DoesNotNotify(t *testing.T) {
+	fake := seedFake()
+	fake.def = sampleDef() // no Settings at all
+	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1"}}, runErr: context.DeadlineExceeded}
+	notifier := &fakeNotifier{}
+	r := routerWithNotifier(fake, run, notifier)
+
+	w, _ := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/run", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(notifier.calls) != 0 {
+		t.Fatalf("a flow with no notification settings must not notify, got %d calls", len(notifier.calls))
+	}
+}
+
+func TestRunFlow_Failed_EmptyRecipients_DoesNotNotify(t *testing.T) {
+	fake := seedFake()
+	fake.def = defWithFailureEmails() // Notification present but no emails
+	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1"}}, runErr: context.DeadlineExceeded}
+	notifier := &fakeNotifier{}
+	r := routerWithNotifier(fake, run, notifier)
+
+	doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/run", nil)
+	if len(notifier.calls) != 0 {
+		t.Fatalf("empty FailureEmails must not notify, got %d calls", len(notifier.calls))
+	}
+}
+
+// A notify failure is non-fatal: the run is still recorded (FinishExecution ran)
+// and the request still succeeds. Exercises the WARN branch in onDone.
+func TestRunFlow_Failed_NotifyError_IsNonFatal(t *testing.T) {
+	fake := seedFake()
+	fake.def = defWithFailureEmails("ops@mywork.local")
+	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1"}}, runErr: context.DeadlineExceeded}
+	notifier := &fakeNotifier{err: errors.New("smtp unreachable")}
+	r := routerWithNotifier(fake, run, notifier)
+
+	w, _ := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/run", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 even when notify fails", w.Code)
+	}
+	if len(fake.finished) != 1 || fake.finished[0].status != "failed" {
+		t.Fatalf("run must still be recorded failed, got %+v", fake.finished)
+	}
+	if len(notifier.calls) != 1 {
+		t.Fatalf("expected one RunFailed attempt, got %d", len(notifier.calls))
+	}
+}
+
+// When no Notifier is injected, NewRouter substitutes notify.Noop: a failed run
+// with recipients must still succeed (the Noop swallows the notice).
+func TestRunFlow_Failed_NilNotifier_UsesNoop(t *testing.T) {
+	fake := seedFake()
+	fake.def = defWithFailureEmails("ops@mywork.local")
+	run := &fakeRunner{result: flowspec.FlowResult{Path: []string{"t1"}}, runErr: context.DeadlineExceeded}
+	r := routerWithRunner(fake, run) // nil notifier → Noop
+
+	w, _ := doReq(t, r, http.MethodPost, "/api/automate/v1/flows/flw_payroll/run", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(fake.finished) != 1 || fake.finished[0].status != "failed" {
+		t.Fatalf("run must still be recorded failed, got %+v", fake.finished)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/nodes"
+	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
@@ -42,6 +43,11 @@ type handlers struct {
 	audit  audit.Service
 	sched  scheduler.Scheduler
 	log    *slog.Logger
+
+	// notifier alerts a flow's configured recipients when a run finishes
+	// "failed" (E5-S6). Never nil once NewRouter has run — notify.Noop when SMTP
+	// is not configured. A notify failure is non-fatal (logged WARN in onDone).
+	notifier notify.Notifier
 
 	// querier backs the query-preview and schema endpoints (E6-S4/E6-S2). It is
 	// the seam over the database: in production it is the API's pgx pool (see the

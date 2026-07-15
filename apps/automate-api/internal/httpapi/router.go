@@ -14,6 +14,7 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
+	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
@@ -47,13 +48,18 @@ type AuthConfig struct {
 // RBAC role resolution; pass a zero AuthConfig to run without local auth (X-Role
 // / defaultRole fallback). querier backs the query-preview and schema endpoints
 // (E6-S4/E6-S2) — the composition root passes preview.PoolQuerier over the API's
-// pgx pool; nil disables those endpoints (they then 503).
-func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig, querier preview.Querier) *gin.Engine {
+// pgx pool; nil disables those endpoints (they then 503). notifier alerts a
+// flow's configured recipients when a run finishes "failed" (E5-S6); nil falls
+// back to notify.Noop (no email — SMTP not configured).
+func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig, querier preview.Querier, notifier notify.Notifier) *gin.Engine {
 	if auditSvc == nil {
 		auditSvc = audit.NewNoop()
 	}
 	if sched == nil {
 		sched = scheduler.Noop{}
+	}
+	if notifier == nil {
+		notifier = notify.Noop{}
 	}
 
 	// The masking engine uses the security-reviewed default rule set; its patterns
@@ -75,7 +81,7 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 		c.JSON(http.StatusOK, gin.H{"status": "ready", "env": cfg.Env})
 	})
 
-	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger, querier: querier, mask: maskEng}
+	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger, querier: querier, mask: maskEng, notifier: notifier}
 
 	deps := authDeps{service: authCfg.Service, audit: auditSvc}
 	if authCfg.Logger != nil {

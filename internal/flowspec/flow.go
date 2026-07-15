@@ -19,8 +19,19 @@ const (
 
 // FlowDef is the flow-definition graph (docs/spec/06 §1).
 type FlowDef struct {
-	Nodes []NodeDef `json:"nodes"`
-	Edges []EdgeDef `json:"edges"`
+	Nodes    []NodeDef `json:"nodes"`
+	Edges    []EdgeDef `json:"edges"`
+	Settings *Settings `json:"settings,omitempty"`
+}
+
+// Settings holds flow-level configuration (docs/spec/06: settings.notification).
+type Settings struct {
+	Notification *NotificationSettings `json:"notification,omitempty"`
+}
+
+// NotificationSettings configures run-failure alerts (E5-S6).
+type NotificationSettings struct {
+	FailureEmails []string `json:"failureEmails,omitempty"`
 }
 
 // NodeDef is one graph node; Config is the node's opaque, type-specific config.

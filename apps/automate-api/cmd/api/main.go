@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	auditpg "github.com/mywork/automate/apps/automate-api/internal/audit/postgres"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
+	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
@@ -25,8 +27,24 @@ import (
 	"github.com/mywork/automate/internal/config"
 	"github.com/mywork/automate/internal/flowspec"
 	"github.com/mywork/automate/pkg/logscrub"
+	mailersmtp "github.com/mywork/automate/pkg/mailer/smtp"
 	"github.com/mywork/automate/pkg/obs"
 )
+
+// SMTP defaults for run-failure notifications (E5-S6). These mirror the worker's
+// delivery.email defaults so both connect to the same dev mailhog by default.
+const (
+	defaultSMTPAddr = "localhost:1025"
+	defaultSMTPFrom = "automate@mywork.local"
+)
+
+// getenv returns the trimmed env var or a default when unset/blank.
+func getenv(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
 
 // devJWTSecret is used only when AUTH_LOCAL_ENABLED=true and AUTH_JWT_SECRET is
 // unset — i.e. local dev. The config guard already prevents local auth from
@@ -154,9 +172,15 @@ func main() {
 	// (pkg/secrets) and build a dedicated, least-privilege pool per connection.
 	querier := preview.PoolQuerier{Pool: pool}
 
+	// Run-failure notifications (E5-S6): the SMTP sender points at the same
+	// endpoint as the worker's delivery.email (dev mailhog by default). onDone
+	// emails the flow's configured recipients when a run finishes "failed".
+	sender := mailersmtp.New(getenv("SMTP_ADDR", defaultSMTPAddr), getenv("SMTP_FROM", defaultSMTPFrom))
+	notifier := notify.New(sender)
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg, querier),
+		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg, querier, notifier),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
