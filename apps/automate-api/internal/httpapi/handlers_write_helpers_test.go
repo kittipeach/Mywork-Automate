@@ -69,6 +69,27 @@ func TestBuildSteps_NothingRan_SynthesisesFailedStep(t *testing.T) {
 	}
 }
 
+func TestBuildSteps_ContinuedNodeErrorMarksStepFailed(t *testing.T) {
+	def := flowspec.FlowDef{Nodes: []flowspec.NodeDef{
+		{ID: "q1", Type: "db.query", Name: "Bad query"},
+		{ID: "done", Type: "noop", Name: "After"},
+	}}
+	res := flowspec.FlowResult{
+		Path: []string{"q1", "done"},
+		Outputs: map[string]flowspec.NodeOutput{
+			"q1":   {Meta: map[string]any{"error": "column does not exist"}},
+			"done": {},
+		},
+	}
+	steps := buildSteps(def, res, nil) // whole run "succeeded" (onError=continue)
+	if steps[0].Status != "failed" || steps[0].Error == nil || *steps[0].Error != "column does not exist" {
+		t.Fatalf("q1 should be a failed step carrying the error, got %+v", steps[0])
+	}
+	if steps[1].Status != "success" {
+		t.Errorf("downstream node should be success, got %q", steps[1].Status)
+	}
+}
+
 func TestBuildSteps_CapturesOutputSample(t *testing.T) {
 	items := []map[string]any{{"id": 1}, {"id": 2}, {"id": 3}}
 	res := flowspec.FlowResult{

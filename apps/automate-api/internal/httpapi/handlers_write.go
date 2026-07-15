@@ -178,6 +178,15 @@ func buildSteps(def flowspec.FlowDef, res flowspec.FlowResult, runErr error) []s
 			OutputCount:  outputCount(out),
 			OutputSample: truncate(out.Items, sampleLimit),
 		}
+		// A node run with onError=continue/errorBranch records its failure in
+		// Outputs[...].Meta["error"]; surface it as a failed step so the audit
+		// trail isn't misleadingly green.
+		if out.Meta != nil {
+			if e, ok := out.Meta["error"].(string); ok && e != "" {
+				step.Status = "failed"
+				step.Error = &e
+			}
+		}
 		// Input sample = the previous step's output sample (best-effort chain).
 		// The first step has no predecessor, so its input sample stays nil.
 		if i > 0 {
