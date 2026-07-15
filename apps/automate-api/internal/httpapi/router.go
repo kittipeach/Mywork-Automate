@@ -120,6 +120,9 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	authed.GET("/connections", RequirePermission(authz.FlowView), h.listConnections)
 	// Version history read model — anyone who can view flows (E4-S2).
 	authed.GET("/flows/:id/versions", RequirePermission(authz.FlowView), h.listVersions)
+	// Flow validation (E3-S4): report graph problems before a run. Read-only
+	// analysis of the flow's definition — gated on FlowView.
+	authed.POST("/flows/:id/validate", RequirePermission(authz.FlowView), h.validateFlow)
 
 	// Audit trail read model — admin-only (docs/spec/07 §6). A permission gate
 	// would leak the trail to any role sharing that permission, so it is gated on

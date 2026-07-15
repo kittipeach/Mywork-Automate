@@ -15,7 +15,14 @@ import {
 } from '@xyflow/react';
 import { NODE_BY_TYPE } from '@/lib/nodeRegistry';
 import type { FormValues } from '@/features/node-config';
-import type { FlowNode, FlowEdge, GraphSnapshot, ConfigByNode, ValidityByNode } from './types';
+import type {
+  FlowNode,
+  FlowEdge,
+  GraphSnapshot,
+  ConfigByNode,
+  ValidityByNode,
+  StatusByNode,
+} from './types';
 import {
   createNode,
   canConnect,
@@ -31,6 +38,8 @@ export type FlowState = {
   selectedNodeId: string | null;
   configByNode: ConfigByNode;
   validityByNode: ValidityByNode;
+  /** per-node run status during a test run; empty when not running. */
+  statusByNode: StatusByNode;
   past: GraphSnapshot[];
   future: GraphSnapshot[];
 
@@ -48,6 +57,10 @@ export type FlowState = {
   selectNode: (id: string | null) => void;
   setNodeConfig: (id: string, values: FormValues) => void;
   renameNode: (id: string, name: string) => void;
+
+  // test-run status overlay (E3-S4)
+  setStatusByNode: (statusByNode: StatusByNode) => void;
+  clearRunStatus: () => void;
 
   // history
   undo: () => void;
@@ -75,6 +88,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   selectedNodeId: null,
   configByNode: {},
   validityByNode: {},
+  statusByNode: {},
   past: [],
   future: [],
 
@@ -185,6 +199,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       nodes: s.nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, name } } : n)),
     })),
 
+  setStatusByNode: (statusByNode) => set(() => ({ statusByNode })),
+  clearRunStatus: () => set(() => ({ statusByNode: {} })),
+
   undo: () =>
     set((s) => {
       if (s.past.length === 0) return s;
@@ -229,6 +246,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       edges: snap.edges,
       configByNode: config,
       validityByNode: recomputeValidity(snap.nodes, config),
+      statusByNode: {},
       selectedNodeId: null,
       past: [],
       future: [],

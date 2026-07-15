@@ -24,11 +24,23 @@ type FlowDef struct {
 }
 
 // NodeDef is one graph node; Config is the node's opaque, type-specific config.
+// OnError controls how the interpreter reacts when the node's activity fails
+// ("fail" = fail the run (default), "continue" = record the error and carry on,
+// "errorBranch" = follow the node's "error"-labelled out-edge). Retry is the
+// per-node retry policy applied to the node's activity (FR-LOGIC-008).
 type NodeDef struct {
-	ID     string          `json:"id"`
-	Type   string          `json:"type"`
-	Name   string          `json:"name"`
-	Config json.RawMessage `json:"config"`
+	ID      string          `json:"id"`
+	Type    string          `json:"type"`
+	Name    string          `json:"name"`
+	Config  json.RawMessage `json:"config"`
+	OnError string          `json:"onError,omitempty"` // "fail"|"continue"|"errorBranch"
+	Retry   *RetryPolicy    `json:"retry,omitempty"`
+}
+
+// RetryPolicy is a node's activity retry configuration.
+type RetryPolicy struct {
+	MaxAttempts            int `json:"maxAttempts,omitempty"`            // total attempts (1 = no retry)
+	InitialIntervalSeconds int `json:"initialIntervalSeconds,omitempty"` // backoff seed
 }
 
 // EdgeDef is a directed edge; Label is "" or "true"/"false" for logic.if.

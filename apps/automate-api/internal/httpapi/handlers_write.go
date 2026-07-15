@@ -149,22 +149,41 @@ func (h *handlers) writeStoreError(c *gin.Context, err error) {
 	errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
 }
 
+// sampleLimit caps how many items are copied into a step's I/O snapshot
+// (docs/spec/08 E5-S3). The spec sets the hard ceiling at 1,000 items; we keep a
+// smaller 50-item head sample per step so run-detail payloads stay light — the
+// full item COUNT is preserved separately in OutputCount, so nothing about the
+// run's true size is lost.
+const sampleLimit = 50
+
 // buildSteps maps a FlowResult into execution steps. Each executed node in
 // result.Path becomes a "success" step; outputCount comes from the node's
 // Meta["rowCount"] if present, else len(Items). On a run error the final step
 // (the last node that ran, or a synthetic one when nothing ran) is marked
 // "failed" and carries the error message.
+//
+// It also captures the per-step I/O snapshot (E5-S3): OutputSample is the node's
+// emitted items truncated to sampleLimit; InputSample is best-effort the
+// predecessor step's (already-truncated) output. The items are ALREADY masked by
+// the executors before they reach here, so buildSteps never re-masks them.
 func buildSteps(def flowspec.FlowDef, res flowspec.FlowResult, runErr error) []store.ExecutionStep {
 	steps := make([]store.ExecutionStep, 0, len(res.Path))
-	for _, nodeID := range res.Path {
+	for i, nodeID := range res.Path {
 		out := res.Outputs[nodeID]
-		steps = append(steps, store.ExecutionStep{
-			NodeID:      nodeID,
-			NodeName:    nodeName(def, nodeID),
-			NodeType:    nodeType(def, nodeID),
-			Status:      "success",
-			OutputCount: outputCount(out),
-		})
+		step := store.ExecutionStep{
+			NodeID:       nodeID,
+			NodeName:     nodeName(def, nodeID),
+			NodeType:     nodeType(def, nodeID),
+			Status:       "success",
+			OutputCount:  outputCount(out),
+			OutputSample: truncate(out.Items, sampleLimit),
+		}
+		// Input sample = the previous step's output sample (best-effort chain).
+		// The first step has no predecessor, so its input sample stays nil.
+		if i > 0 {
+			step.InputSample = steps[i-1].OutputSample
+		}
+		steps = append(steps, step)
 	}
 
 	if runErr != nil {
@@ -186,6 +205,17 @@ func buildSteps(def flowspec.FlowDef, res flowspec.FlowResult, runErr error) []s
 		}
 	}
 	return steps
+}
+
+// truncate returns items capped at n. A nil/short slice is returned unchanged
+// (nil stays nil so the DTO omits the sample); a longer slice is cut to its head
+// so the sample is representative and cheap. It does not copy — the items are
+// already the executor's masked output and are only read after this point.
+func truncate(items []map[string]any, n int) []map[string]any {
+	if len(items) <= n {
+		return items
+	}
+	return items[:n]
 }
 
 // outputCount prefers the node's reported rowCount metadata, falling back to the

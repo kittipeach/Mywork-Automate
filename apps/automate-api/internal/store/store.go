@@ -34,15 +34,23 @@ type FlowSummary struct {
 
 // ExecutionStep matches the TS execution `steps[]` element. Error is a pointer
 // so it is omitted when empty, matching the mock's optional `error?`.
+//
+// InputSample/OutputSample are the per-step I/O snapshots (docs/spec/08 E5-S3).
+// They hold a TRUNCATED copy of the items flowing in/out of the node, already
+// masked by the executors before they ever reach the store (masked-before-write).
+// Both are omitempty so a step without a snapshot serialises without the keys,
+// and both map to nullable JSONB columns (migration 0005_step_io).
 type ExecutionStep struct {
-	NodeID      string  `json:"nodeId"`
-	NodeName    string  `json:"nodeName"`
-	NodeType    string  `json:"nodeType"`
-	Status      string  `json:"status"`
-	DurationMs  int64   `json:"durationMs"`
-	InputCount  int64   `json:"inputCount"`
-	OutputCount int64   `json:"outputCount"`
-	Error       *string `json:"error,omitempty"`
+	NodeID       string           `json:"nodeId"`
+	NodeName     string           `json:"nodeName"`
+	NodeType     string           `json:"nodeType"`
+	Status       string           `json:"status"`
+	DurationMs   int64            `json:"durationMs"`
+	InputCount   int64            `json:"inputCount"`
+	OutputCount  int64            `json:"outputCount"`
+	Error        *string          `json:"error,omitempty"`
+	InputSample  []map[string]any `json:"inputSample,omitempty"`
+	OutputSample []map[string]any `json:"outputSample,omitempty"`
 }
 
 // Execution matches the TS `Execution` shape. Note the JSON key is `trigger`

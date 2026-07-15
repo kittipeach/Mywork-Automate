@@ -171,7 +171,7 @@ func (s *Store) GetExecution(ctx context.Context, id string) (store.Execution, e
 	}
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT node_id, node_name, node_type, status, duration_ms, input_count, output_count, error_message
+		`SELECT node_id, node_name, node_type, status, duration_ms, input_count, output_count, error_message, input_sample, output_sample
 		 FROM execution_steps WHERE execution_id = $1 ORDER BY seq ASC`, id)
 	if err != nil {
 		return store.Execution{}, fmt.Errorf("postgres: get execution steps: %w", err)
@@ -180,15 +180,22 @@ func (s *Store) GetExecution(ctx context.Context, id string) (store.Execution, e
 
 	for rows.Next() {
 		var (
-			st     store.ExecutionStep
-			errMsg *string
+			st            store.ExecutionStep
+			errMsg        *string
+			inRaw, outRaw []byte
 		)
 		if err := rows.Scan(&st.NodeID, &st.NodeName, &st.NodeType, &st.Status,
-			&st.DurationMs, &st.InputCount, &st.OutputCount, &errMsg); err != nil {
+			&st.DurationMs, &st.InputCount, &st.OutputCount, &errMsg, &inRaw, &outRaw); err != nil {
 			return store.Execution{}, fmt.Errorf("postgres: scan step: %w", err)
 		}
 		if errMsg != nil && *errMsg != "" {
 			st.Error = errMsg
+		}
+		if st.InputSample, err = scanSample(inRaw); err != nil {
+			return store.Execution{}, fmt.Errorf("postgres: scan step input sample: %w", err)
+		}
+		if st.OutputSample, err = scanSample(outRaw); err != nil {
+			return store.Execution{}, fmt.Errorf("postgres: scan step output sample: %w", err)
 		}
 		e.Steps = append(e.Steps, st)
 	}
@@ -305,12 +312,24 @@ func (s *Store) FinishExecution(ctx context.Context, id, status string, duration
 		if st.Error != nil && *st.Error != "" {
 			errMsg = st.Error
 		}
+		// I/O snapshots (E5-S3): marshal the already-masked, already-truncated
+		// samples to JSONB, or NULL when the step carries none. The items are
+		// masked by the executors before they reach the store, so nothing here
+		// re-masks them.
+		inSample, err := sampleJSON(st.InputSample)
+		if err != nil {
+			return fmt.Errorf("postgres: finish execution marshal input sample step %d: %w", seq, err)
+		}
+		outSample, err := sampleJSON(st.OutputSample)
+		if err != nil {
+			return fmt.Errorf("postgres: finish execution marshal output sample step %d: %w", seq, err)
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO execution_steps
-			 (execution_id, seq, node_id, node_name, node_type, status, duration_ms, input_count, output_count, error_message)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			 (execution_id, seq, node_id, node_name, node_type, status, duration_ms, input_count, output_count, error_message, input_sample, output_sample)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 			id, seq, st.NodeID, st.NodeName, st.NodeType, st.Status,
-			st.DurationMs, st.InputCount, st.OutputCount, errMsg); err != nil {
+			st.DurationMs, st.InputCount, st.OutputCount, errMsg, inSample, outSample); err != nil {
 			return fmt.Errorf("postgres: finish execution insert step %d: %w", seq, err)
 		}
 	}
@@ -327,6 +346,33 @@ func (s *Store) FinishExecution(ctx context.Context, id, status string, duration
 		return fmt.Errorf("postgres: finish execution commit: %w", err)
 	}
 	return nil
+}
+
+// sampleJSON marshals an I/O sample to JSONB bytes, returning nil (→ SQL NULL)
+// for an empty/absent sample so the column stays NULL rather than storing "null"
+// or "[]". The pgx codec sends []byte to a JSONB parameter verbatim.
+func sampleJSON(items []map[string]any) ([]byte, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// scanSample decodes JSONB sample bytes back into a slice; nil/empty bytes (a
+// NULL column) yield a nil slice so the DTO omits the field.
+func scanSample(raw []byte) ([]map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 // SetExecutionStatus updates only an execution's status (e.g. "cancelled").

@@ -7,6 +7,7 @@ import {
   isNodeValid,
   invalidNodes,
   effectiveConfig,
+  upstreamNodeNames,
   makeNodeId,
   resetIdSeq,
 } from './graph';
@@ -131,5 +132,46 @@ describe('invalidNodes', () => {
     const ids = list.map((n) => n.id);
     expect(ids).toContain('qry'); // missing connectionId
     expect(ids).not.toContain('fil'); // fully configured
+  });
+});
+
+describe('upstreamNodeNames', () => {
+  // trg → qry → iff → fil  (a straight chain)
+  const chainEdges: FlowEdge[] = [
+    { id: 'e1', source: 'trg', target: 'qry' },
+    { id: 'e2', source: 'qry', target: 'iff' },
+    { id: 'e3', source: 'iff', target: 'fil' },
+  ];
+
+  it('lists all transitive ancestors of a node', () => {
+    const names = upstreamNodeNames('fil', nodes, chainEdges);
+    // breadth-first from the target: iff, then qry, then trg
+    expect(names).toEqual(['If', 'DB Query', 'Schedule']);
+  });
+
+  it('returns the immediate parent only when there is one hop', () => {
+    expect(upstreamNodeNames('qry', nodes, chainEdges)).toEqual(['Schedule']);
+  });
+
+  it('returns [] for a node with no incoming edges', () => {
+    expect(upstreamNodeNames('trg', nodes, chainEdges)).toEqual([]);
+  });
+
+  it('dedupes when two paths converge on the same ancestor', () => {
+    // diamond: trg → qry, trg → iff, qry → fil, iff → fil
+    const diamond: FlowEdge[] = [
+      { id: 'a', source: 'trg', target: 'qry' },
+      { id: 'b', source: 'trg', target: 'iff' },
+      { id: 'c', source: 'qry', target: 'fil' },
+      { id: 'd', source: 'iff', target: 'fil' },
+    ];
+    const names = upstreamNodeNames('fil', nodes, diamond);
+    expect(names.filter((n) => n === 'Schedule')).toHaveLength(1);
+    expect(new Set(names)).toEqual(new Set(['DB Query', 'If', 'Schedule']));
+  });
+
+  it('ignores edges to nodes not in the node list', () => {
+    const edges: FlowEdge[] = [{ id: 'e', source: 'ghost', target: 'fil' }];
+    expect(upstreamNodeNames('fil', nodes, edges)).toEqual([]);
   });
 });

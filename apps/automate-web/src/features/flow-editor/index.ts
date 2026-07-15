@@ -13,6 +13,9 @@ export {
   isNodeValid,
   invalidNodes,
   effectiveConfig,
+  upstreamNodeNames,
 } from './graph';
 export { validateFlow, testRun, publishFlow, type Banner } from './actions';
-export type { FlowNode, FlowEdge, GraphSnapshot, FlowNodeData } from './types';
+export { RunControls } from './RunControls';
+export { stepStatusByNode, summarise, isTerminal, type RunSummary } from './runStatus';
+export type { FlowNode, FlowEdge, GraphSnapshot, FlowNodeData, StatusByNode } from './types';

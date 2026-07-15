@@ -6,25 +6,23 @@
 // sample flow so any flow id opens onto a populated canvas.
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import Link from 'next/link';
-import { Play, UploadCloud, X } from 'lucide-react';
+import { UploadCloud, X } from 'lucide-react';
 import { flows } from '@/lib/mock/store';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/cn';
-import { useRunFlow, usePublishFlow } from '@/api/mutations';
+import { usePublishFlow } from '@/api/mutations';
 import {
   Canvas,
   Palette,
   ConfigPanel,
   EditorToolbar,
+  RunControls,
   useFlowStore,
   useUndoRedoHotkeys,
   seedFlow,
 } from '@/features/flow-editor';
 
-type Banner =
-  | { tone: 'success'; title: string; executionId?: string }
-  | { tone: 'danger'; title: string; executionId?: undefined };
+type Banner = { tone: 'success' | 'danger'; title: string };
 
 const toneClasses: Record<Banner['tone'], string> = {
   success: 'bg-success/10 text-success border-success/30',
@@ -40,7 +38,6 @@ export default function FlowEditorPage() {
   const addNode = useFlowStore((s) => s.addNode);
   const selectNode = useFlowStore((s) => s.selectNode);
 
-  const runFlow = useRunFlow();
   const publishFlow = usePublishFlow();
   const [banner, setBanner] = useState<Banner | null>(null);
 
@@ -56,15 +53,6 @@ export default function FlowEditorPage() {
   const handleAdd = (nodeType: string) => {
     const newId = addNode(nodeType, { x: 120, y: 120 });
     if (newId) selectNode(newId);
-  };
-
-  const handleRun = () => {
-    if (!id || runFlow.isPending) return;
-    runFlow.mutate(id, {
-      onSuccess: ({ executionId }) =>
-        setBanner({ tone: 'success', title: 'Run started', executionId }),
-      onError: () => setBanner({ tone: 'danger', title: 'Failed to start run' }),
-    });
   };
 
   const handlePublish = () => {
@@ -87,10 +75,8 @@ export default function FlowEditorPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <EditorToolbar flowName={flowName} />
-      <div className="relative flex items-center justify-end gap-2 border-b border-border bg-surface px-6 py-2">
-        <Button size="sm" variant="secondary" onClick={handleRun} disabled={runFlow.isPending}>
-          <Play className="h-4 w-4" /> {runFlow.isPending ? 'Starting…' : 'Test run'}
-        </Button>
+      <div className="relative flex items-start justify-end gap-3 border-b border-border bg-surface px-6 py-2">
+        <RunControls flowId={id} />
         <Button size="sm" onClick={handlePublish} disabled={publishFlow.isPending}>
           <UploadCloud className="h-4 w-4" /> {publishFlow.isPending ? 'Publishing…' : 'Publish'}
         </Button>
@@ -105,14 +91,6 @@ export default function FlowEditorPage() {
           >
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold">{banner.title}</div>
-              {banner.executionId && (
-                <Link
-                  href={`/automate/runs/${banner.executionId}`}
-                  className="mt-0.5 inline-block text-xs underline underline-offset-2 opacity-90 hover:opacity-100"
-                >
-                  View run {banner.executionId} →
-                </Link>
-              )}
             </div>
             <button
               type="button"

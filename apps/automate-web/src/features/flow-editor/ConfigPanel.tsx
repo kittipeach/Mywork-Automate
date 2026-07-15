@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
 import { SchemaForm } from '@/features/node-config';
 import { QueryPanel } from '@/features/connections/QueryPanel';
 import { nodeIcon } from './nodeIcons';
+import { upstreamNodeNames } from './graph';
 import { useFlowStore } from './store';
 
 export function ConfigPanel() {
@@ -21,6 +22,9 @@ export function ConfigPanel() {
   const setNodeConfig = useFlowStore((s) => s.setNodeConfig);
   const renameNode = useFlowStore((s) => s.renameNode);
   const selectNode = useFlowStore((s) => s.selectNode);
+  const availableNodes = useFlowStore((s) =>
+    s.selectedNodeId ? upstreamNodeNames(s.selectedNodeId, s.nodes, s.edges) : [],
+  );
 
   if (!selectedNodeId || !node) {
     return (
@@ -70,6 +74,7 @@ export function ConfigPanel() {
             formId={selectedNodeId}
             schema={def.schema}
             value={config}
+            availableNodes={availableNodes}
             onChange={(v) => setNodeConfig(selectedNodeId, v)}
           />
         )}

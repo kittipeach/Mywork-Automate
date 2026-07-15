@@ -197,6 +197,56 @@ func TestIntegration_GetExecutionWithSteps(t *testing.T) {
 	}
 }
 
+// TestIntegration_FinishExecutionIOSamples writes an execution's steps with
+// per-step I/O snapshots (E5-S3) and reads them back via GetExecution,
+// exercising the input_sample/output_sample JSONB columns (migration 0005).
+// A step with no sample must round-trip as absent (nil), not "null"/[].
+func TestIntegration_FinishExecutionIOSamples(t *testing.T) {
+	ctx := context.Background()
+	pool, s := freshPool(t, ctx)
+	defer pool.Close()
+
+	exec := store.Execution{
+		ID: "exe_io", FlowID: "flw_payroll", FlowName: "Payroll → Bank MFT",
+		Status: "running", Trigger: "manual", StartedAt: "2026-07-14T02:00:00.000Z", Version: 3,
+	}
+	if err := s.CreateExecution(ctx, exec); err != nil {
+		t.Fatalf("create execution: %v", err)
+	}
+
+	steps := []store.ExecutionStep{
+		{NodeID: "t1", NodeName: "Manual", NodeType: "trigger.manual", Status: "success"},
+		{
+			NodeID: "q1", NodeName: "Query", NodeType: "db.query", Status: "success",
+			OutputCount:  2,
+			InputSample:  []map[string]any{{"param": "x"}},
+			OutputSample: []map[string]any{{"emp": "A", "amt": float64(100)}, {"emp": "B", "amt": float64(200)}},
+		},
+	}
+	if err := s.FinishExecution(ctx, "exe_io", "success", 1234, steps); err != nil {
+		t.Fatalf("finish execution: %v", err)
+	}
+
+	got, err := s.GetExecution(ctx, "exe_io")
+	if err != nil {
+		t.Fatalf("get execution: %v", err)
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("steps = %d, want 2", len(got.Steps))
+	}
+	// Step 0 had no samples → both nil (absent).
+	if got.Steps[0].InputSample != nil || got.Steps[0].OutputSample != nil {
+		t.Fatalf("step 0 samples should be nil, got in=%+v out=%+v", got.Steps[0].InputSample, got.Steps[0].OutputSample)
+	}
+	// Step 1 round-trips both samples.
+	if len(got.Steps[1].InputSample) != 1 || got.Steps[1].InputSample[0]["param"] != "x" {
+		t.Fatalf("input sample not round-tripped: %+v", got.Steps[1].InputSample)
+	}
+	if len(got.Steps[1].OutputSample) != 2 || got.Steps[1].OutputSample[1]["emp"] != "B" {
+		t.Fatalf("output sample not round-tripped: %+v", got.Steps[1].OutputSample)
+	}
+}
+
 func TestIntegration_ListConnectionsRBAC(t *testing.T) {
 	ctx := context.Background()
 	pool, s := freshPool(t, ctx)

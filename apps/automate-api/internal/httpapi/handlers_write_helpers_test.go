@@ -69,6 +69,93 @@ func TestBuildSteps_NothingRan_SynthesisesFailedStep(t *testing.T) {
 	}
 }
 
+func TestBuildSteps_CapturesOutputSample(t *testing.T) {
+	items := []map[string]any{{"id": 1}, {"id": 2}, {"id": 3}}
+	res := flowspec.FlowResult{
+		Path: []string{"t1", "q1"},
+		Outputs: map[string]flowspec.NodeOutput{
+			"q1": {Items: items},
+		},
+	}
+	steps := buildSteps(sampleDef(), res, nil)
+	if len(steps) != 2 {
+		t.Fatalf("want 2 steps, got %d", len(steps))
+	}
+	// t1 emitted nothing → no sample.
+	if steps[0].OutputSample != nil {
+		t.Errorf("t1 should have no output sample, got %+v", steps[0].OutputSample)
+	}
+	// q1's sample mirrors its items.
+	if len(steps[1].OutputSample) != 3 || steps[1].OutputSample[0]["id"] != 1 {
+		t.Errorf("q1 output sample not captured: %+v", steps[1].OutputSample)
+	}
+	// The input sample of q1 is best-effort the predecessor's output.
+	if len(steps[1].InputSample) != 0 {
+		t.Errorf("t1 produced nothing, so q1 input sample should be empty, got %+v", steps[1].InputSample)
+	}
+}
+
+func TestBuildSteps_InputSampleIsPredecessorOutput(t *testing.T) {
+	up := []map[string]any{{"row": "a"}, {"row": "b"}}
+	res := flowspec.FlowResult{
+		Path: []string{"t1", "q1"},
+		Outputs: map[string]flowspec.NodeOutput{
+			"t1": {Items: up},
+			"q1": {Items: []map[string]any{{"out": 1}}},
+		},
+	}
+	steps := buildSteps(sampleDef(), res, nil)
+	// q1's input sample is t1's output sample.
+	if len(steps[1].InputSample) != 2 || steps[1].InputSample[1]["row"] != "b" {
+		t.Errorf("q1 input sample should mirror t1 output: %+v", steps[1].InputSample)
+	}
+}
+
+func TestBuildSteps_TruncatesOutputSample(t *testing.T) {
+	big := make([]map[string]any, 120)
+	for i := range big {
+		big[i] = map[string]any{"n": i}
+	}
+	res := flowspec.FlowResult{
+		Path:    []string{"t1", "q1"},
+		Outputs: map[string]flowspec.NodeOutput{"q1": {Items: big}},
+	}
+	steps := buildSteps(sampleDef(), res, nil)
+	if len(steps[1].OutputSample) != sampleLimit {
+		t.Fatalf("output sample should be truncated to %d, got %d", sampleLimit, len(steps[1].OutputSample))
+	}
+	// OutputCount still reflects the full item count, not the truncated sample.
+	if steps[1].OutputCount != 120 {
+		t.Errorf("outputCount should be full 120, got %d", steps[1].OutputCount)
+	}
+	// Truncation keeps the head.
+	if steps[1].OutputSample[0]["n"] != 0 {
+		t.Errorf("truncation should keep the head, got %+v", steps[1].OutputSample[0])
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	// nil stays nil (no allocation, DTO omits the field).
+	if got := truncate(nil, 50); got != nil {
+		t.Errorf("truncate(nil) = %+v, want nil", got)
+	}
+	// under the limit is returned unchanged.
+	in := []map[string]any{{"a": 1}, {"a": 2}}
+	if got := truncate(in, 50); len(got) != 2 {
+		t.Errorf("under limit should be unchanged, got %d", len(got))
+	}
+	// exactly at the limit is unchanged.
+	at := make([]map[string]any, 3)
+	if got := truncate(at, 3); len(got) != 3 {
+		t.Errorf("at limit should be unchanged, got %d", len(got))
+	}
+	// over the limit is cut to the limit.
+	over := make([]map[string]any, 10)
+	if got := truncate(over, 4); len(got) != 4 {
+		t.Errorf("over limit should be cut to 4, got %d", len(got))
+	}
+}
+
 // runFlow error branches
 func TestRunFlow_BadJSON_400(t *testing.T) {
 	fake := seedFake()

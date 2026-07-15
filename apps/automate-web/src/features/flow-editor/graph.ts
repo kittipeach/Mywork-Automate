@@ -97,6 +97,32 @@ export function isNodeValid(nodeType: string, stored?: FormValues): boolean {
   return validate(def.schema, values).valid;
 }
 
+/**
+ * Names of the nodes upstream of `nodeId` (all transitive ancestors following
+ * edges backward). Used to populate the expression data picker so a field can
+ * only reference nodes that actually run before it. Returns names in a stable
+ * order (breadth-first from the target) with duplicates removed.
+ */
+export function upstreamNodeNames(
+  nodeId: string,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const nameById = new Map(nodes.map((n) => [n.id, n.data.name]));
+  const seen = new Set<string>();
+  const order: string[] = [];
+  const queue = edges.filter((e) => e.target === nodeId).map((e) => e.source);
+  while (queue.length > 0) {
+    const src = queue.shift()!;
+    if (seen.has(src)) continue;
+    seen.add(src);
+    const name = nameById.get(src);
+    if (name) order.push(name);
+    for (const e of edges) if (e.target === src) queue.push(e.source);
+  }
+  return order;
+}
+
 /** Names of nodes whose config is incomplete (used by the Validate action). */
 export function invalidNodes(
   nodes: FlowNode[],

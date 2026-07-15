@@ -37,6 +37,10 @@ export default defineConfig({
         'src/features/flow-editor/AutomateNode.tsx',
         'src/features/flow-editor/ConfigPanel.tsx',
         'src/features/flow-editor/EditorToolbar.tsx',
+        // RunControls wires TanStack Query mutations + polling into the canvas
+        // store; its pure logic lives in runStatus.ts + api/validation.ts (both
+        // gated). Presentational panels verified via the running app / Playwright.
+        'src/features/flow-editor/RunControls.tsx',
         'src/features/flow-editor/useUndoRedoHotkeys.ts',
         'src/**/index.ts',
         'src/**/types.ts',

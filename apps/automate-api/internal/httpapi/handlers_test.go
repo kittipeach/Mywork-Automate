@@ -437,6 +437,55 @@ func TestGetExecution_StoreError(t *testing.T) {
 	assertErrorEnvelope(t, body, "internal")
 }
 
+// GET /executions/{id} surfaces the per-step I/O snapshots (E5-S3) when present.
+func TestGetExecution_ReturnsIOSamples(t *testing.T) {
+	fs := seedFake()
+	fs.execs = append(fs.execs, store.Execution{
+		ID: "exe_io", FlowID: "flw_payroll", FlowName: "Payroll", Status: "success",
+		Trigger: "manual", StartedAt: "2026-07-14T02:00:00.000Z", Version: 3,
+		Steps: []store.ExecutionStep{
+			{
+				NodeID: "q1", NodeName: "Query", NodeType: "db.query", Status: "success",
+				OutputCount:  2,
+				InputSample:  []map[string]any{{"in": "seed"}},
+				OutputSample: []map[string]any{{"emp": "A"}, {"emp": "B"}},
+			},
+		},
+	})
+	r := newTestRouter(fs)
+	w, body := doReq(t, r, http.MethodGet, APIBasePath+"/executions/exe_io", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	steps := body["steps"].([]any)
+	step := steps[0].(map[string]any)
+	out, ok := step["outputSample"].([]any)
+	if !ok || len(out) != 2 {
+		t.Fatalf("outputSample = %v, want 2 items", step["outputSample"])
+	}
+	if out[0].(map[string]any)["emp"] != "A" {
+		t.Errorf("output sample item = %v, want emp=A", out[0])
+	}
+	in, ok := step["inputSample"].([]any)
+	if !ok || len(in) != 1 {
+		t.Fatalf("inputSample = %v, want 1 item", step["inputSample"])
+	}
+}
+
+// A step without samples omits the keys entirely (omitempty), so the run-detail
+// UI can treat their absence as "no snapshot".
+func TestGetExecution_OmitsAbsentSamples(t *testing.T) {
+	r := newTestRouter(seedFake())
+	_, body := doReq(t, r, http.MethodGet, APIBasePath+"/executions/exe_1001", nil)
+	step := body["steps"].([]any)[0].(map[string]any)
+	if _, present := step["inputSample"]; present {
+		t.Errorf("inputSample should be omitted when absent, got %v", step["inputSample"])
+	}
+	if _, present := step["outputSample"]; present {
+		t.Errorf("outputSample should be omitted when absent, got %v", step["outputSample"])
+	}
+}
+
 func TestListConnections_RBAC(t *testing.T) {
 	tests := []struct {
 		name       string

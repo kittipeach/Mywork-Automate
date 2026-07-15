@@ -7,6 +7,7 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AlertTriangle } from 'lucide-react';
 import { NODE_BY_TYPE } from '@/lib/nodeRegistry';
+import { statusToRing } from '@/api/validation';
 import { cn } from '@/lib/cn';
 import { nodeIcon } from './nodeIcons';
 import { useFlowStore } from './store';
@@ -16,6 +17,8 @@ function AutomateNodeInner({ id, data, selected }: NodeProps) {
   const d = data as FlowNodeData;
   const def = NODE_BY_TYPE[d.nodeType];
   const valid = useFlowStore((s) => s.validityByNode[id] ?? true);
+  const runStatus = useFlowStore((s) => s.statusByNode[id]);
+  const runRing = statusToRing(runStatus);
   const Icon = nodeIcon(def?.icon ?? '');
 
   if (!def) {
@@ -33,10 +36,18 @@ function AutomateNodeInner({ id, data, selected }: NodeProps) {
     <div
       className={cn(
         'relative w-52 rounded-lg border bg-surface shadow-panel transition-shadow',
-        selected ? 'border-brand ring-2 ring-brand' : 'border-border',
-        !valid && !selected && 'border-danger/60',
+        // during a test run the run-status ring wins so progress reads clearly;
+        // otherwise fall back to the selected / invalid styling.
+        runRing
+          ? cn('border-border', runRing)
+          : selected
+            ? 'border-brand ring-2 ring-brand'
+            : !valid
+              ? 'border-danger/60'
+              : 'border-border',
       )}
       data-testid={`node-${id}`}
+      data-run-status={runStatus ?? undefined}
     >
       {/* input handles (left) */}
       {def.inputs.map((port, i) => (

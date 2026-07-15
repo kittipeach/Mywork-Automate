@@ -53,12 +53,34 @@ export function useConnections() {
   });
 }
 
-/** Single execution with its per-step drill-down. Disabled until an id is given. */
-export function useExecution(id: string) {
+/** Statuses that mean the run is still in flight (keep polling). */
+export const RUNNING_STATUSES = ['queued', 'running'] as const;
+
+/** True while an execution should keep being polled (non-terminal). */
+export function isRunning(status?: string): boolean {
+  return status === 'queued' || status === 'running';
+}
+
+/**
+ * Single execution with its per-step drill-down. Disabled until an id is given.
+ *
+ * When `poll` is set, the query auto-refetches on `intervalMs` (default 1500ms)
+ * *only while the run is still queued/running*; once it reaches a terminal state
+ * `refetchInterval` returns false and polling stops. This drives the test-run
+ * overlay in the flow editor (E3-S4).
+ */
+export function useExecution(id: string, opts: { poll?: boolean; intervalMs?: number } = {}) {
+  const { poll = false, intervalMs = 1500 } = opts;
   return useQuery({
     queryKey: ['execution', id],
     queryFn: () => getJSON<Execution>(`/executions/${id}`),
     enabled: !!id,
+    refetchInterval: (query) => {
+      if (!poll) return false;
+      const status = query.state.data?.status;
+      // keep polling until the run reaches a terminal state
+      return isRunning(status) ? intervalMs : false;
+    },
   });
 }
 

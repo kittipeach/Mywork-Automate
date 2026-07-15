@@ -27,12 +27,35 @@ type FlowDef struct {
 }
 
 // NodeDef is one graph node. Config is the node's opaque, type-specific config.
+// OnError controls how the interpreter reacts when the node's activity fails:
+// "fail" (default, or "") fails the run; "continue" records the error and carries
+// on down the node's normal out-edges with empty items; "errorBranch" records the
+// error and follows only the node's "error"-labelled out-edge(s). Retry is the
+// per-node activity retry policy (E9-S4 / FR-LOGIC-008). These mirror
+// flowspec.NodeDef byte-for-byte so definitions round-trip through Temporal JSON.
 type NodeDef struct {
-	ID     string          `json:"id"`
-	Type   string          `json:"type"`
-	Name   string          `json:"name"`
-	Config json.RawMessage `json:"config"`
+	ID      string          `json:"id"`
+	Type    string          `json:"type"`
+	Name    string          `json:"name"`
+	Config  json.RawMessage `json:"config"`
+	OnError string          `json:"onError,omitempty"` // "fail"|"continue"|"errorBranch"
+	Retry   *RetryPolicy    `json:"retry,omitempty"`
 }
+
+// RetryPolicy is a node's activity retry configuration (mirrors flowspec.RetryPolicy).
+type RetryPolicy struct {
+	MaxAttempts            int `json:"maxAttempts,omitempty"`            // total attempts (1 = no retry)
+	InitialIntervalSeconds int `json:"initialIntervalSeconds,omitempty"` // backoff seed
+}
+
+// onError modes.
+const (
+	onErrorFail        = "fail"
+	onErrorContinue    = "continue"
+	onErrorErrorBranch = "errorBranch"
+	// errorEdgeLabel is the out-edge label followed for an errorBranch node.
+	errorEdgeLabel = "error"
+)
 
 // EdgeDef is a directed edge. Label is "" for a plain edge, or "true"/"false"
 // for the branches out of a decision node (logic.if).

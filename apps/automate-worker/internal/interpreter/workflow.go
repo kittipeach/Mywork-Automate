@@ -35,6 +35,40 @@ type FlowResult struct {
 // is the outer Temporal bound so a wedged attempt cannot run forever.
 const activityStartToClose = 2 * time.Minute
 
+// Default retry-policy values used when a node has no Retry config (these match
+// the base policy the interpreter has always applied).
+const (
+	defaultMaxAttempts     = 5
+	defaultInitialInterval = time.Second
+)
+
+// activityOptionsFor builds the Temporal ActivityOptions for one node. It always
+// keeps the StartToCloseTimeout and the base backoff shape (2x coefficient, 1m
+// cap); the node's Retry config only overrides MaximumAttempts and the seed
+// InitialInterval. A nil Retry yields the default policy (today's behaviour), so
+// each node gets its own policy without disturbing un-configured nodes.
+func activityOptionsFor(retry *RetryPolicy) workflow.ActivityOptions {
+	maxAttempts := int32(defaultMaxAttempts)
+	initialInterval := defaultInitialInterval
+	if retry != nil {
+		if retry.MaxAttempts > 0 {
+			maxAttempts = int32(retry.MaxAttempts)
+		}
+		if retry.InitialIntervalSeconds > 0 {
+			initialInterval = time.Duration(retry.InitialIntervalSeconds) * time.Second
+		}
+	}
+	return workflow.ActivityOptions{
+		StartToCloseTimeout: activityStartToClose,
+		RetryPolicy: &temporal.RetryPolicy{
+			InitialInterval:    initialInterval,
+			BackoffCoefficient: 2.0,
+			MaximumInterval:    time.Minute,
+			MaximumAttempts:    maxAttempts,
+		},
+	}
+}
+
 // FlowWorkflow is the generic interpreter. It is deterministic: it finds the
 // single trigger node, then walks the graph node-by-node, executing each via the
 // ExecuteNode activity and following edges. For a node whose activity returns a
@@ -42,16 +76,6 @@ const activityStartToClose = 2 * time.Minute
 // (logic.if -> "true"/"false"); otherwise it follows all unlabeled out-edges.
 // All iteration order is sorted (see graph helpers) so replay is identical.
 func FlowWorkflow(ctx workflow.Context, in FlowInput) (FlowResult, error) {
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: activityStartToClose,
-		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:    time.Second,
-			BackoffCoefficient: 2.0,
-			MaximumInterval:    time.Minute,
-			MaximumAttempts:    5,
-		},
-	})
-
 	start, err := findTrigger(in.Flow)
 	if err != nil {
 		return FlowResult{}, err
@@ -91,9 +115,40 @@ func FlowWorkflow(ctx workflow.Context, in FlowInput) (FlowResult, error) {
 			InItems:     inItems,
 			ViewerRoles: in.ViewerRoles,
 		}
+		// Each node gets its own ActivityOptions so its Retry config maps to an
+		// independent Temporal retry policy (unconfigured nodes keep the default).
+		nodeCtx := workflow.WithActivityOptions(ctx, activityOptionsFor(node.Retry))
+
 		var res NodeExecResult
-		if err := workflow.ExecuteActivity(ctx, a.ExecuteNode, req).Get(ctx, &res); err != nil {
-			return FlowResult{}, fmt.Errorf("interpreter: node %q (%s) failed: %w", node.ID, node.Type, err)
+		if execErr := workflow.ExecuteActivity(nodeCtx, a.ExecuteNode, req).Get(nodeCtx, &res); execErr != nil {
+			wrapped := fmt.Errorf("interpreter: node %q (%s) failed: %w", node.ID, node.Type, execErr)
+
+			// decision selects which out-edges to follow after a handled error:
+			// "" for "continue" (normal unlabeled edges), errorEdgeLabel for
+			// "errorBranch". mode "fail" (default) returns immediately.
+			var decision string
+			switch node.OnError {
+			case onErrorContinue:
+				decision = ""
+			case onErrorErrorBranch:
+				// Fall back to failing the run when there is no error edge to follow.
+				if len(outEdges(in.Flow.Edges, node.ID, errorEdgeLabel)) == 0 {
+					return FlowResult{}, wrapped
+				}
+				decision = errorEdgeLabel
+			default: // onErrorFail or ""
+				return FlowResult{}, wrapped
+			}
+
+			// Record the failed node (empty items, error in Meta) and route on.
+			result.Path = append(result.Path, node.ID)
+			result.Outputs[node.ID] = NodeOutput{Meta: map[string]any{"error": execErr.Error()}}
+			for _, next := range outEdges(in.Flow.Edges, node.ID, decision) {
+				if !visited[next] {
+					queue = append(queue, next)
+				}
+			}
+			continue
 		}
 
 		result.Path = append(result.Path, node.ID)

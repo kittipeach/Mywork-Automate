@@ -20,3 +20,5 @@ export type GraphSnapshot = {
 
 export type ConfigByNode = Record<string, FormValues>;
 export type ValidityByNode = Record<string, boolean>;
+/** Per-node run status during a test run (nodeId → step status). */
+export type StatusByNode = Record<string, string>;

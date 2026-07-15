@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useNodes, useFlows, useExecutions, useConnections, useExecution, useVersions } from './hooks';
+import { useNodes, useFlows, useExecutions, useConnections, useExecution, useVersions, isRunning, RUNNING_STATUSES } from './hooks';
 import { setToken, clearToken } from '@/lib/token';
 
 function wrapper() {
@@ -99,6 +99,50 @@ describe('api hooks', () => {
     const { result } = renderHook(() => useVersions(''), { wrapper: wrapper() });
     expect(result.current.fetchStatus).toBe('idle');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('isRunning / RUNNING_STATUSES', () => {
+  it('is true only for queued/running', () => {
+    expect(isRunning('queued')).toBe(true);
+    expect(isRunning('running')).toBe(true);
+    expect(isRunning('success')).toBe(false);
+    expect(isRunning('failed')).toBe(false);
+    expect(isRunning(undefined)).toBe(false);
+  });
+
+  it('RUNNING_STATUSES lists the non-terminal statuses', () => {
+    expect([...RUNNING_STATUSES]).toEqual(['queued', 'running']);
+  });
+});
+
+describe('useExecution polling', () => {
+  it('does not schedule a refetch when poll is off', async () => {
+    fetchMock.mockReturnValue(ok({ id: 'exe_1', status: 'running', steps: [] }));
+    const { result } = renderHook(() => useExecution('exe_1'), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // one fetch, no repeat scheduled
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fetchMock.mock.calls.length).toBe(1);
+  });
+
+  it('keeps polling while running, then stops once terminal', async () => {
+    fetchMock
+      .mockReturnValueOnce(ok({ id: 'exe_1', status: 'running', steps: [] }))
+      .mockReturnValueOnce(ok({ id: 'exe_1', status: 'running', steps: [] }))
+      .mockReturnValue(ok({ id: 'exe_1', status: 'success', steps: [] }));
+
+    const { result } = renderHook(() => useExecution('exe_1', { poll: true, intervalMs: 10 }), {
+      wrapper: wrapper(),
+    });
+
+    await waitFor(() => expect(result.current.data?.status).toBe('success'), { timeout: 1000 });
+    const callsAtTerminal = fetchMock.mock.calls.length;
+    expect(callsAtTerminal).toBeGreaterThanOrEqual(3);
+
+    // no further polling after reaching a terminal status
+    await new Promise((r) => setTimeout(r, 40));
+    expect(fetchMock.mock.calls.length).toBe(callsAtTerminal);
   });
 });
 

@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import type { JSONSchema } from '@/lib/nodeRegistry';
 import { cn } from '@/lib/cn';
+import { ExpressionInput } from './ExpressionInput';
 import {
   fieldsFor,
   validate,
@@ -25,6 +26,8 @@ export type SchemaFormProps = {
   onValidityChange?: (valid: boolean) => void;
   /** stable id so the form re-inits when switching between nodes. */
   formId?: string;
+  /** upstream node names offered in the expression data picker (E3-S3). */
+  availableNodes?: string[];
 };
 
 function fieldId(formId: string, name: string) {
@@ -37,6 +40,7 @@ export function SchemaForm({
   onChange,
   onValidityChange,
   formId = 'schema-form',
+  availableNodes = [],
 }: SchemaFormProps) {
   const initial = useMemo<FormValues>(
     () => ({ ...defaultsFor(schema), ...(value ?? {}) }),
@@ -84,6 +88,7 @@ export function SchemaForm({
           control={control}
           formId={formId}
           error={errors[field.name]}
+          availableNodes={availableNodes}
         />
       ))}
       {fields.length === 0 && (
@@ -98,12 +103,14 @@ function Field({
   control,
   formId,
   error,
+  availableNodes,
 }: {
   field: FieldSpec;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   control: any;
   formId: string;
   error?: string;
+  availableNodes: string[];
 }) {
   const s = field.schema;
   const id = fieldId(formId, field.name);
@@ -224,10 +231,45 @@ function Field({
     );
   }
 
-  // string with format sql/expression → monospace textarea with affordance
-  const isCode = s.format === 'sql' || s.format === 'expression';
+  // string with format:'expression' → the rich ExpressionInput (E3-S3): a
+  // monospace textarea with a suggestion dropdown + data-picker side tree.
+  if (s.format === 'expression') {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          {labelEl}
+          <span
+            className="rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] font-semibold text-ink-muted"
+            aria-hidden="true"
+          >
+            ƒx
+          </span>
+        </div>
+        <Controller
+          name={field.name}
+          control={control}
+          render={({ field: f }) => (
+            <ExpressionInput
+              id={id}
+              value={(f.value as string) ?? ''}
+              onChange={f.onChange}
+              onBlur={f.onBlur}
+              invalid={Boolean(error)}
+              availableNodes={availableNodes}
+              aria-describedby={describedBy}
+            />
+          )}
+        />
+        {s.description && <p className="text-xs text-ink-subtle">{s.description}</p>}
+        <FieldError id={errorId} message={error} />
+      </div>
+    );
+  }
+
+  // string with format sql → monospace textarea with affordance
+  const isCode = s.format === 'sql';
   const isTextarea = s.format === 'textarea' || isCode;
-  const affordance = s.format === 'sql' ? 'SQL' : s.format === 'expression' ? 'ƒx' : null;
+  const affordance = s.format === 'sql' ? 'SQL' : null;
 
   if (isTextarea) {
     return (
