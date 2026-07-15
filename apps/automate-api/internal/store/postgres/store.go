@@ -29,20 +29,25 @@ func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 // compile-time check that *Store satisfies the interface.
 var _ store.Store = (*Store)(nil)
 
-const flowSelect = `SELECT id, name, folder, status, updated_at, last_run_status, last_run_at, current_version FROM flows`
+const flowSelect = `SELECT id, name, folder, status, updated_at, last_run_status, last_run_at, current_version, deleted_at FROM flows`
 
 func scanFlow(row pgx.Row) (store.FlowSummary, error) {
 	var (
 		f             store.FlowSummary
 		lastRunStatus *string
 		lastRunAt     *string
+		deletedAt     *time.Time
 	)
 	if err := row.Scan(&f.ID, &f.Name, &f.Folder, &f.Status, &f.UpdatedAt,
-		&lastRunStatus, &lastRunAt, &f.Version); err != nil {
+		&lastRunStatus, &lastRunAt, &f.Version, &deletedAt); err != nil {
 		return store.FlowSummary{}, err
 	}
 	if lastRunStatus != nil && lastRunAt != nil {
 		f.LastRun = &store.LastRun{Status: *lastRunStatus, At: *lastRunAt}
+	}
+	if deletedAt != nil {
+		s := deletedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+		f.DeletedAt = &s
 	}
 	return f, nil
 }
@@ -65,6 +70,10 @@ func (s *Store) ListFlows(ctx context.Context, f store.FlowFilter) ([]store.Flow
 	if f.Folder != "" {
 		args = append(args, f.Folder)
 		conds = append(conds, fmt.Sprintf("folder = $%d", len(args)))
+	}
+	// Soft-delete filter (E3-S6): exclude deleted rows unless the caller opted in.
+	if !f.IncludeDeleted {
+		conds = append(conds, "deleted_at IS NULL")
 	}
 
 	q := flowSelect
@@ -433,7 +442,7 @@ func (s *Store) PublishFlow(ctx context.Context, id string) (store.FlowSummary, 
 	f, err := scanFlow(s.pool.QueryRow(ctx,
 		`UPDATE flows SET status = 'published', current_version = current_version + 1, updated_at = $2
 		 WHERE id = $1
-		 RETURNING id, name, folder, status, updated_at, last_run_status, last_run_at, current_version`,
+		 RETURNING id, name, folder, status, updated_at, last_run_status, last_run_at, current_version, deleted_at`,
 		id, nowISO()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.FlowSummary{}, store.NewNotFound("flow not found: " + id)
@@ -455,6 +464,92 @@ func (s *Store) SetFlowStatus(ctx context.Context, id, status string) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return store.NewNotFound("flow not found: " + id)
+	}
+	return nil
+}
+
+// SoftDeleteFlow stamps deleted_at = now on the flow, leaving status untouched
+// (E3-S6). ErrNotFound when the flow is unknown. It touches updated_at so the
+// change surfaces in ordering. A re-delete simply re-stamps deleted_at.
+func (s *Store) SoftDeleteFlow(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE flows SET deleted_at = now(), updated_at = $2 WHERE id = $1`,
+		id, nowISO())
+	if err != nil {
+		return fmt.Errorf("postgres: soft delete flow: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	return nil
+}
+
+// RestoreFlow clears deleted_at, returning the flow to the default list (E3-S6).
+// ErrNotFound when the flow is unknown.
+func (s *Store) RestoreFlow(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE flows SET deleted_at = NULL, updated_at = $2 WHERE id = $1`,
+		id, nowISO())
+	if err != nil {
+		return fmt.Errorf("postgres: restore flow: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	return nil
+}
+
+// ListGrants returns a flow's object-level access grants (E2-S3), ordered by id.
+func (s *Store) ListGrants(ctx context.Context, flowID string) ([]store.Grant, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, flow_id, subject_type, subject_id, access
+		 FROM flow_grants WHERE flow_id = $1 ORDER BY id ASC`, flowID)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list grants: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]store.Grant, 0)
+	for rows.Next() {
+		var g store.Grant
+		if err := rows.Scan(&g.ID, &g.FlowID, &g.SubjectType, &g.SubjectID, &g.Access); err != nil {
+			return nil, fmt.Errorf("postgres: scan grant: %w", err)
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: list grants rows: %w", err)
+	}
+	return out, nil
+}
+
+// AddGrant inserts a grant, upserting the access level on the unique
+// (flow_id, subject_type, subject_id) key so re-granting a subject updates rather
+// than duplicates. It returns the grant with its assigned id.
+func (s *Store) AddGrant(ctx context.Context, flowID string, in store.GrantInput) (store.Grant, error) {
+	g := store.Grant{FlowID: flowID, SubjectType: in.SubjectType, SubjectID: in.SubjectID, Access: in.Access}
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO flow_grants (flow_id, subject_type, subject_id, access)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (flow_id, subject_type, subject_id) DO UPDATE SET access = EXCLUDED.access
+		 RETURNING id`,
+		flowID, in.SubjectType, in.SubjectID, in.Access).Scan(&g.ID)
+	if err != nil {
+		return store.Grant{}, fmt.Errorf("postgres: add grant: %w", err)
+	}
+	return g, nil
+}
+
+// DeleteGrant removes one grant by id, scoped to flowID. ErrNotFound when no such
+// grant exists on that flow.
+func (s *Store) DeleteGrant(ctx context.Context, flowID string, grantID int64) error {
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM flow_grants WHERE id = $1 AND flow_id = $2`, grantID, flowID)
+	if err != nil {
+		return fmt.Errorf("postgres: delete grant: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.NewNotFound(fmt.Sprintf("grant not found: %d on flow %s", grantID, flowID))
 	}
 	return nil
 }

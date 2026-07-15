@@ -133,6 +133,16 @@ func (h *handlers) startRun(c *gin.Context, def flowspec.FlowDef, flow store.Flo
 		ctx := context.Background()
 		_ = h.store.FinishExecution(ctx, execID, status, durationMs, steps)
 
+		// E11-S3: emit a run-correlated completion event so ELK can join the
+		// control-plane record to the worker's logs. run_id is the execution id
+		// (the worker side already stamps WorkflowID via Temporal's logger), and
+		// flow_id/status/duration_ms round out the correlation fields.
+		h.info("flow run finished",
+			"run_id", execID,
+			"flow_id", flow.ID,
+			"status", status,
+			"duration_ms", durationMs)
+
 		// E5-S6: on a failed run, alert the flow's configured recipients. Delivery
 		// is best-effort — a notify error must not affect the run's recording, so
 		// it is logged at WARN and swallowed. No recipients => no-op notifier.
@@ -478,6 +488,15 @@ func (h *handlers) syncSchedule(c *gin.Context, flowID string) {
 func (h *handlers) warn(msg string, kv ...any) {
 	if h.log != nil {
 		h.log.Warn(msg, kv...)
+	}
+}
+
+// info logs at INFO when a logger is configured; nil is tolerated (no-op). It
+// backs the run-completion correlation event (E11-S3) so ELK gets a structured,
+// run-correlated record carrying run_id/flow_id/status/duration_ms.
+func (h *handlers) info(msg string, kv ...any) {
+	if h.log != nil {
+		h.log.Info(msg, kv...)
 	}
 }
 

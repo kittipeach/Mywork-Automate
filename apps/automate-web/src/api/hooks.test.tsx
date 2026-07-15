@@ -54,6 +54,24 @@ describe('api hooks', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/automate/v1/flows');
   });
 
+  it('useFlows appends includeDeleted=true only when the flag is set', async () => {
+    fetchMock.mockReturnValueOnce(ok({ flows: [] }));
+    const { result } = renderHook(() => useFlows({ includeDeleted: true }), { wrapper: wrapper() });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/automate/v1/flows?includeDeleted=true');
+  });
+
+  it('useFlows omits includeDeleted when false', async () => {
+    fetchMock.mockReturnValueOnce(ok({ flows: [] }));
+    const { result } = renderHook(() => useFlows({ q: 'pay', includeDeleted: false }), {
+      wrapper: wrapper(),
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('q=pay');
+    expect(url).not.toContain('includeDeleted');
+  });
+
   it('useExecutions passes flowId', async () => {
     fetchMock.mockReturnValueOnce(ok({ executions: [] }));
     const { result } = renderHook(() => useExecutions({ flowId: 'flw_1' }), { wrapper: wrapper() });

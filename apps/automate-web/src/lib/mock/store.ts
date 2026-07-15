@@ -11,6 +11,8 @@ export type FlowSummary = {
   updatedAt: string;
   lastRun?: { status: RunStatus; at: string };
   version: number;
+  /** Soft-delete marker (E3-S6). Absent for live flows; ISO timestamp once deleted. */
+  deletedAt?: string;
 };
 
 export type Execution = {
@@ -55,6 +57,7 @@ export const flows: FlowSummary[] = [
   { id: 'flw_leave', name: 'Leave Balance Report', folder: 'HR Ops', status: 'paused', version: 1, updatedAt: iso(5), lastRun: { status: 'failed', at: iso(3) } },
   { id: 'flw_newhire', name: 'New Hire Onboarding Export', folder: 'HR Ops', status: 'draft', version: 0, updatedAt: iso(0) },
   { id: 'flw_gov', name: 'Gov Submission (TIS-620)', folder: 'Compliance', status: 'stopped', version: 4, updatedAt: iso(9), lastRun: { status: 'cancelled', at: iso(8) } },
+  { id: 'flw_legacy', name: 'Legacy Import (deprecated)', folder: 'HR Ops', status: 'stopped', version: 2, updatedAt: iso(30), deletedAt: iso(12), lastRun: { status: 'success', at: iso(31) } },
 ];
 
 export const executions: Execution[] = [
@@ -85,6 +88,33 @@ export const executions: Execution[] = [
       { nodeId: 'q1', nodeName: 'Query Headcount', nodeType: 'db.query', status: 'running', durationMs: 0, inputCount: 1, outputCount: 0 },
     ],
   },
+];
+
+export type Grant = {
+  id: string;
+  flowId: string;
+  subjectType: 'role' | 'user';
+  subjectId: string;
+  access: 'viewer' | 'editor' | 'owner';
+};
+
+export const grants: Grant[] = [
+  { id: 'grn_1', flowId: 'flw_payroll', subjectType: 'role', subjectId: 'operator', access: 'viewer' },
+  { id: 'grn_2', flowId: 'flw_payroll', subjectType: 'user', subjectId: 'jane@mywork.co', access: 'editor' },
+];
+
+export type DirectoryUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  roles: string[];
+};
+
+export const users: DirectoryUser[] = [
+  { id: 'usr_admin', email: 'admin@mywork.co', displayName: 'Ada Admin', roles: ['admin'] },
+  { id: 'usr_designer', email: 'dan@mywork.co', displayName: 'Dan Designer', roles: ['designer'] },
+  { id: 'usr_op', email: 'olive@mywork.co', displayName: 'Olive Operator', roles: ['operator'] },
+  { id: 'usr_multi', email: 'mia@mywork.co', displayName: 'Mia Multi', roles: ['designer', 'operator'] },
 ];
 
 export const connections: Connection[] = [

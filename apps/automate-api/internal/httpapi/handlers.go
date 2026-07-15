@@ -14,6 +14,7 @@ import (
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
 	"github.com/mywork/automate/apps/automate-api/internal/scheduler"
 	"github.com/mywork/automate/apps/automate-api/internal/store"
+	"github.com/mywork/automate/pkg/authz"
 	"github.com/mywork/automate/pkg/masking"
 )
 
@@ -107,12 +108,18 @@ func (h *handlers) listNodes(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"nodes": nodes.All()})
 }
 
-// listFlows → GET /flows?q=&status=&folder=
+// listFlows → GET /flows?q=&status=&folder=&includeDeleted=. Soft-deleted flows
+// (E3-S6) are excluded by default; ?includeDeleted=true includes them (each then
+// carrying a deletedAt marker) but is honoured for admins only — a non-admin
+// asking for deleted rows is silently served the live-only list rather than
+// erroring, so the parameter is safe to pass unconditionally from a shared UI.
 func (h *handlers) listFlows(c *gin.Context) {
+	includeDeleted := c.Query("includeDeleted") == "true" && callerRole(c) == authz.Admin
 	flows, err := h.store.ListFlows(c.Request.Context(), store.FlowFilter{
-		Q:      c.Query("q"),
-		Status: c.Query("status"),
-		Folder: c.Query("folder"),
+		Q:              c.Query("q"),
+		Status:         c.Query("status"),
+		Folder:         c.Query("folder"),
+		IncludeDeleted: includeDeleted,
 	})
 	if err != nil {
 		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())

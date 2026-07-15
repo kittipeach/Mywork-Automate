@@ -155,3 +155,33 @@ export function useRollback() {
     },
   });
 }
+
+/**
+ * DELETE /flows/{id} → 204 (soft delete; E3-S6). No request body; `request`
+ * resolves to undefined on the 204. Invalidates the flows list so the row drops
+ * out of the default (live-only) view and reappears greyed under "Show deleted".
+ */
+export function useDeleteFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string) => request<void>('DELETE', `/flows/${flowId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['flows'] });
+    },
+  });
+}
+
+/**
+ * POST /flows/{id}/restore → 200 FlowSummary (admin only; E3-S6). Un-deletes a
+ * soft-deleted flow. Invalidates the flows list so it moves back into the live
+ * view.
+ */
+export function useRestoreFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (flowId: string) => poster<FlowSummary>(`/flows/${flowId}/restore`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['flows'] });
+    },
+  });
+}

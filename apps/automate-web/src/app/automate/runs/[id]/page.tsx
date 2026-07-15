@@ -5,13 +5,13 @@
 // input→output row counts, and any error (red). Loading + not-found states.
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertTriangle, Ban, RotateCw, Loader2 } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Ban, RotateCw, Loader2, Radio } from 'lucide-react';
 import { TopBar } from '@/components/shell/TopBar';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
-import { useExecution } from '@/api/hooks';
+import { useExecution, isRunning } from '@/api/hooks';
 import { ApiError } from '@/api/mutations';
 import {
   useCancelExecution,
@@ -19,6 +19,7 @@ import {
   canCancel,
   canRetry,
 } from '@/api/executions';
+import { useExecutionStream } from '@/api/stream';
 import { fmtDuration, fmtDateTime, stepDotColor } from '@/api/format';
 
 export default function RunDetailPage() {
@@ -26,7 +27,16 @@ export default function RunDetailPage() {
   const id = params?.id ?? '';
   const router = useRouter();
   const { toast } = useToast();
-  const { data: run, isLoading, isError } = useExecution(id);
+  const { data: queried, isLoading, isError } = useExecution(id);
+
+  // Prefer a live SSE stream while the run is in flight. The initial query tells
+  // us whether it's running; once it is, subscribe and let stream snapshots take
+  // over. The stream's own snapshot also keeps it enabled through terminal.
+  const streamEnabled = isRunning(queried?.status);
+  const { execution: streamed, connected } = useExecutionStream(id, streamEnabled);
+  // The freshest view: the stream snapshot when present, else the query result.
+  const run = streamed ?? queried;
+  const live = connected && isRunning(run?.status);
 
   const cancel = useCancelExecution();
   const retry = useRetryExecution();
@@ -106,7 +116,17 @@ export default function RunDetailPage() {
                     {run.id} · started {fmtDateTime(run.startedAt)}
                   </div>
                 </div>
-                <StatusBadge status={run.status} />
+                <div className="flex items-center gap-2">
+                  {live && (
+                    <span
+                      className="inline-flex items-center gap-1.5 rounded-full bg-info/10 px-2.5 py-0.5 text-xs font-medium text-info"
+                      role="status"
+                    >
+                      <Radio className="h-3 w-3 animate-pulse" aria-hidden /> Live
+                    </span>
+                  )}
+                  <StatusBadge status={run.status} />
+                </div>
               </div>
               <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
                 <Meta label="Trigger" value={<span className="capitalize">{run.trigger}</span>} />

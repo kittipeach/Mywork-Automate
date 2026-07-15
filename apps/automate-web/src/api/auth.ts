@@ -42,6 +42,27 @@ export function useMe() {
   });
 }
 
+/** A directory user with their assigned roles (admin users list; E2-S3). */
+export type DirectoryUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  roles: string[];
+};
+
+/**
+ * GET /users → {users:[...]} (admin only; E2-S3). 403 for non-admins is
+ * tolerated (no retry) so callers render a friendly "admin only" message from
+ * `isError` rather than crashing.
+ */
+export function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: () => getJSON<{ users: DirectoryUser[] }>('/users'),
+    retry: false,
+  });
+}
+
 /** Whether a bearer token is currently held (browser-only; false during SSR). */
 export function isAuthenticated(): boolean {
   return getToken() !== null;

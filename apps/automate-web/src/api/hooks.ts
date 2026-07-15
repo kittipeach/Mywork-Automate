@@ -26,10 +26,18 @@ export function useNodes() {
   });
 }
 
-export function useFlows(params: { q?: string; status?: string; folder?: string } = {}) {
-  const qs = new URLSearchParams(
-    Object.entries(params).filter(([, v]) => v) as [string, string][],
-  ).toString();
+export function useFlows(
+  params: { q?: string; status?: string; folder?: string; includeDeleted?: boolean } = {},
+) {
+  const { includeDeleted, ...rest } = params;
+  const search = new URLSearchParams(
+    Object.entries(rest).filter(([, v]) => v) as [string, string][],
+  );
+  // includeDeleted is a boolean flag: only emit it when truthy (a `false` would
+  // otherwise be dropped by the falsy filter above, but we never want `=false`
+  // on the wire — its absence means "live flows only").
+  if (includeDeleted) search.set('includeDeleted', 'true');
+  const qs = search.toString();
   return useQuery({
     queryKey: ['flows', params],
     queryFn: () => getJSON<{ flows: FlowSummary[] }>(`/flows${qs ? `?${qs}` : ''}`),

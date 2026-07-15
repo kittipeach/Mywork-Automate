@@ -123,6 +123,9 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	authed.GET("/flows/:id", RequirePermission(authz.FlowView), h.getFlow)
 	authed.GET("/executions", RequirePermission(authz.RunView), h.listExecutions)
 	authed.GET("/executions/:id", RequirePermission(authz.RunView), h.getExecution)
+	// Live run status via Server-Sent Events (E5-S4). Read-only run visibility —
+	// gated on RunView (anyone who can see run history).
+	authed.GET("/executions/:id/stream", RequirePermission(authz.RunView), h.streamExecution)
 	authed.GET("/connections", RequirePermission(authz.FlowView), h.listConnections)
 	// Version history read model — anyone who can view flows (E4-S2).
 	authed.GET("/flows/:id/versions", RequirePermission(authz.FlowView), h.listVersions)
@@ -144,6 +147,16 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	authed.POST("/flows/:id/resume", RequirePermission(authz.FlowPublish), h.resumeFlow)
 	authed.POST("/flows/:id/stop", RequirePermission(authz.FlowPublish), h.stopFlow)
 	authed.POST("/flows/:id/rollback", RequirePermission(authz.FlowPublish), h.rollbackFlow)
+	// Soft-delete + restore (E3-S6). Delete is design-privileged (FlowCreate);
+	// restore is a privileged recovery action, so it is admin-only (RequireAdmin).
+	authed.DELETE("/flows/:id", RequirePermission(authz.FlowCreate), h.deleteFlow)
+	authed.POST("/flows/:id/restore", RequireAdmin(), h.restoreFlow)
+	// Object-level flow grants — the share API (E2-S3). Admin or flow-owner; kept
+	// simple by gating on FlowPublish (object-level owner derivation is layered on
+	// later, when the grant list drives which flows a subject actually sees).
+	authed.GET("/flows/:id/grants", RequirePermission(authz.FlowPublish), h.listGrants)
+	authed.POST("/flows/:id/grants", RequirePermission(authz.FlowPublish), h.addGrant)
+	authed.DELETE("/flows/:id/grants/:grantId", RequirePermission(authz.FlowPublish), h.deleteGrant)
 	authed.POST("/flows/:id/run", RequirePermission(authz.FlowRun), h.runFlow)
 	// Execution control (E5-S5): cancel an in-flight run, or re-run a past one.
 	// Both are run-privileged (FlowRun).

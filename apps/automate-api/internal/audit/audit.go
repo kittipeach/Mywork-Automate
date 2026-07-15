@@ -83,6 +83,7 @@ const (
 	ActionFlowResume   = "flow.resume"
 	ActionFlowStop     = "flow.stop"
 	ActionFlowDelete   = "flow.delete"
+	ActionFlowRestore  = "flow.restore"
 	ActionFlowRollback = "flow.rollback"
 
 	ActionConnectionCreate = "connection.create"

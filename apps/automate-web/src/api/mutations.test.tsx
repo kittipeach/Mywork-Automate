@@ -10,6 +10,8 @@ import {
   useResumeFlow,
   useStopFlow,
   useRollback,
+  useDeleteFlow,
+  useRestoreFlow,
   poster,
   request,
   ApiError,
@@ -243,5 +245,58 @@ describe('useRollback', () => {
     expect(JSON.parse(init.body)).toEqual({ toVersion: 2, changeNote: 'revert bad change' });
     expect(spy).toHaveBeenCalledWith({ queryKey: ['flows'] });
     expect(spy).toHaveBeenCalledWith({ queryKey: ['versions', 'flw_1'] });
+  });
+});
+
+describe('useDeleteFlow', () => {
+  it('DELETEs /flows/{id} with no body and invalidates flows', async () => {
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 204,
+        json: () => Promise.reject(new Error('no body')),
+      } as unknown as Response),
+    );
+    const client = makeClient();
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useDeleteFlow(), { wrapper: wrapperFor(client) });
+
+    result.current.mutate('flw_1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/automate/v1/flows/flw_1');
+    expect(init.method).toBe('DELETE');
+    expect(init.body).toBeUndefined();
+    expect(result.current.data).toBeUndefined();
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['flows'] });
+  });
+
+  it('surfaces a non-2xx as an ApiError', async () => {
+    fetchMock.mockReturnValueOnce(respond(403, {}));
+    const { result } = renderHook(() => useDeleteFlow(), { wrapper: wrapperFor(makeClient()) });
+    result.current.mutate('flw_1');
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBeInstanceOf(ApiError);
+    expect((result.current.error as ApiError).status).toBe(403);
+  });
+});
+
+describe('useRestoreFlow', () => {
+  it('POSTs /flows/{id}/restore with {} and invalidates flows', async () => {
+    fetchMock.mockReturnValueOnce(respond(200, { id: 'flw_1', name: 'X', folder: 'HR', version: 2 }));
+    const client = makeClient();
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(() => useRestoreFlow(), { wrapper: wrapperFor(client) });
+
+    result.current.mutate('flw_1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/automate/v1/flows/flw_1/restore');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe('{}');
+    expect(result.current.data).toMatchObject({ id: 'flw_1' });
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['flows'] });
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useLogin, useMe, logout, isAuthenticated } from './auth';
+import { useLogin, useMe, useUsers, logout, isAuthenticated } from './auth';
 import { ApiError } from './mutations';
 import { getToken, setToken, clearToken } from '@/lib/token';
 
@@ -92,6 +92,35 @@ describe('useMe', () => {
     const { result } = renderHook(() => useMe(), { wrapper: wrapperFor(makeClient()) });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('Bearer tok_me');
+  });
+});
+
+describe('useUsers', () => {
+  it('GETs /users and returns the directory list', async () => {
+    fetchMock.mockReturnValueOnce(
+      respond(200, {
+        users: [{ id: 'u1', email: 'a@b.co', displayName: 'A', roles: ['admin'] }],
+      }),
+    );
+    const { result } = renderHook(() => useUsers(), { wrapper: wrapperFor(makeClient()) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/automate/v1/users');
+    expect(result.current.data?.users).toHaveLength(1);
+  });
+
+  it('tolerates 403 without retrying (errors once)', async () => {
+    fetchMock.mockReturnValue(respond(403, {}));
+    const { result } = renderHook(() => useUsers(), { wrapper: wrapperFor(makeClient()) });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('attaches the bearer token when signed in', async () => {
+    setToken('tok_u');
+    fetchMock.mockReturnValueOnce(respond(200, { users: [] }));
+    const { result } = renderHook(() => useUsers(), { wrapper: wrapperFor(makeClient()) });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('Bearer tok_u');
   });
 });
 

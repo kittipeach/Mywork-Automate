@@ -22,6 +22,11 @@ type LastRun struct {
 }
 
 // FlowSummary matches the TS `FlowSummary` shape byte-for-byte.
+//
+// DeletedAt is the soft-delete marker (E3-S6): nil for a live flow (and then
+// omitted from the wire shape so the existing contract is unchanged), set to the
+// deletion timestamp for a soft-deleted flow. It is only ever populated when the
+// caller opts into ?includeDeleted=true; the default list excludes such rows.
 type FlowSummary struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
@@ -30,6 +35,7 @@ type FlowSummary struct {
 	UpdatedAt string   `json:"updatedAt"`
 	LastRun   *LastRun `json:"lastRun,omitempty"`
 	Version   int      `json:"version"`
+	DeletedAt *string  `json:"deletedAt,omitempty"`
 }
 
 // ExecutionStep matches the TS execution `steps[]` element. Error is a pointer
@@ -82,10 +88,16 @@ type Connection struct {
 // FlowFilter carries the /flows query parameters. Empty fields mean "no filter".
 // Q matches a case-insensitive substring of the flow name; Status and Folder
 // are exact matches (semantics copied from the Next mock route).
+//
+// IncludeDeleted (E3-S6) controls soft-delete visibility: when false (the
+// default) soft-deleted flows — those with a non-NULL deleted_at — are excluded;
+// when true they are included and carry their DeletedAt marker. Only the
+// admin-gated ?includeDeleted=true path sets it.
 type FlowFilter struct {
-	Q      string
-	Status string
-	Folder string
+	Q              string
+	Status         string
+	Folder         string
+	IncludeDeleted bool
 }
 
 // ExecutionFilter carries the /executions query parameters. Empty fields mean
@@ -130,6 +142,30 @@ type Version struct {
 	PublishedAt string `json:"publishedAt"`
 }
 
+// Grant is one object-level access grant on a flow (E2-S3): it maps a subject
+// (a role or a user) to an access level (viewer|editor|owner) on a single flow.
+// JSON tags are camelCase — the /flows/{id}/grants wire contract. ID is the
+// grant's own primary key (used by DELETE /flows/{id}/grants/{grantId}).
+//
+// This delivers the grant model + share API. Object-level flow list filtering
+// (which flows a subject actually sees, derived from these grants) is additive
+// and layered on later.
+type Grant struct {
+	ID          int64  `json:"id"`
+	FlowID      string `json:"flowId"`
+	SubjectType string `json:"subjectType"`
+	SubjectID   string `json:"subjectId"`
+	Access      string `json:"access"`
+}
+
+// GrantInput carries the mutable fields when creating a grant. FlowID is taken
+// from the route, not the body.
+type GrantInput struct {
+	SubjectType string `json:"subjectType"`
+	SubjectID   string `json:"subjectId"`
+	Access      string `json:"access"`
+}
+
 // Store is the contract the httpapi handlers depend on: the read endpoints plus
 // the write endpoints that close the execution loop (run/record) and edit the
 // flow/connection catalog. It is small and interface-based so handlers can be
@@ -166,6 +202,26 @@ type Store interface {
 	// SetFlowStatus updates only a flow's lifecycle status (pause/resume/stop).
 	// ErrNotFound when the flow is unknown.
 	SetFlowStatus(ctx context.Context, id, status string) error
+
+	// SoftDeleteFlow marks a flow deleted (sets deleted_at = now) without
+	// touching its status, so it drops out of the default list but is fully
+	// restorable. ErrNotFound when the flow is unknown. Idempotent-friendly: a
+	// re-delete simply re-stamps deleted_at.
+	SoftDeleteFlow(ctx context.Context, id string) error
+	// RestoreFlow clears a flow's deleted_at, returning it to the default list.
+	// ErrNotFound when the flow is unknown.
+	RestoreFlow(ctx context.Context, id string) error
+
+	// ListGrants returns a flow's object-level access grants (E2-S3), ordered by
+	// id for determinism. An unknown flow yields an empty (non-nil) slice — the
+	// grant list is independent of whether the flow row exists.
+	ListGrants(ctx context.Context, flowID string) ([]Grant, error)
+	// AddGrant inserts (or upserts on the unique (flow_id, subject_type,
+	// subject_id) key) one grant and returns it with its assigned id.
+	AddGrant(ctx context.Context, flowID string, in GrantInput) (Grant, error)
+	// DeleteGrant removes one grant by its id (scoped to flowID). ErrNotFound
+	// when no such grant exists on that flow.
+	DeleteGrant(ctx context.Context, flowID string, grantID int64) error
 
 	// CreateVersion snapshots the given definition as an immutable version row
 	// (docs/spec/08 E4-S2). versionNo must be unique per flow; changeNote is the

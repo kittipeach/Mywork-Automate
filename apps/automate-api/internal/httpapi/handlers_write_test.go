@@ -135,6 +135,84 @@ func (f *fakeStore) SetFlowStatus(_ context.Context, id, status string) error {
 	return store.NewNotFound("flow not found: " + id)
 }
 
+func (f *fakeStore) SoftDeleteFlow(_ context.Context, id string) error {
+	if f.errSoftDelete != nil {
+		return f.errSoftDelete
+	}
+	if f.softDelNotFound {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	for _, fl := range f.flows {
+		if fl.ID == id {
+			if f.deleted == nil {
+				f.deleted = map[string]string{}
+			}
+			f.deleted[id] = "2026-07-15T00:00:00.000Z"
+			f.softDeletes = append(f.softDeletes, id)
+			return nil
+		}
+	}
+	return store.NewNotFound("flow not found: " + id)
+}
+
+func (f *fakeStore) RestoreFlow(_ context.Context, id string) error {
+	if f.errRestore != nil {
+		return f.errRestore
+	}
+	if f.restoreNotFound {
+		return store.NewNotFound("flow not found: " + id)
+	}
+	for _, fl := range f.flows {
+		if fl.ID == id {
+			delete(f.deleted, id)
+			f.restores = append(f.restores, id)
+			return nil
+		}
+	}
+	return store.NewNotFound("flow not found: " + id)
+}
+
+func (f *fakeStore) ListGrants(_ context.Context, flowID string) ([]store.Grant, error) {
+	if f.errListGrants != nil {
+		return nil, f.errListGrants
+	}
+	out := make([]store.Grant, 0)
+	for _, g := range f.grants {
+		if g.FlowID == flowID {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) AddGrant(_ context.Context, flowID string, in store.GrantInput) (store.Grant, error) {
+	if f.errAddGrant != nil {
+		return store.Grant{}, f.errAddGrant
+	}
+	f.nextGrantID++
+	g := store.Grant{ID: f.nextGrantID, FlowID: flowID, SubjectType: in.SubjectType, SubjectID: in.SubjectID, Access: in.Access}
+	f.grants = append(f.grants, g)
+	f.grantsAdded = append(f.grantsAdded, in)
+	return g, nil
+}
+
+func (f *fakeStore) DeleteGrant(_ context.Context, flowID string, grantID int64) error {
+	if f.errDeleteGrant != nil {
+		return f.errDeleteGrant
+	}
+	if f.grantNotFound {
+		return store.NewNotFound("grant not found")
+	}
+	for i, g := range f.grants {
+		if g.ID == grantID && g.FlowID == flowID {
+			f.grants = append(f.grants[:i], f.grants[i+1:]...)
+			f.grantsDeleted = append(f.grantsDeleted, grantID)
+			return nil
+		}
+	}
+	return store.NewNotFound("grant not found")
+}
+
 func (f *fakeStore) CreateVersion(_ context.Context, flowID string, versionNo int, def flowspec.FlowDef, changeNote, publishedBy string) error {
 	if f.errCreateVersion != nil {
 		return f.errCreateVersion

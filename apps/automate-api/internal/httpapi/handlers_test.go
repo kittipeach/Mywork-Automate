@@ -52,6 +52,26 @@ type fakeStore struct {
 	// writeNotFound forces SetFlowStatus/UpdateFlowDefinition to report NotFound
 	// (the concurrent-delete/TOCTOU branch that GetFlow can't provoke).
 	writeNotFound bool
+
+	// soft-delete/restore state/hooks (E3-S6). deleted maps flow id → the
+	// deleted-at marker last stamped; softDeletes/restores record the calls.
+	deleted         map[string]string
+	softDeletes     []string
+	restores        []string
+	errSoftDelete   error // non-notfound error from SoftDeleteFlow
+	errRestore      error // non-notfound error from RestoreFlow
+	softDelNotFound bool  // force SoftDeleteFlow to report NotFound
+	restoreNotFound bool  // force RestoreFlow to report NotFound
+
+	// flow-grants state/hooks (E2-S3).
+	grants         []store.Grant
+	grantsAdded    []store.GrantInput
+	grantsDeleted  []int64
+	nextGrantID    int64
+	errListGrants  error
+	errAddGrant    error
+	errDeleteGrant error // non-notfound error from DeleteGrant
+	grantNotFound  bool  // force DeleteGrant to report NotFound
 }
 
 type finishCall struct {
@@ -124,6 +144,16 @@ func (f *fakeStore) ListFlows(_ context.Context, filter store.FlowFilter) ([]sto
 		}
 		if filter.Folder != "" && fl.Folder != filter.Folder {
 			continue
+		}
+		// Soft-delete filter (E3-S6): a flow is deleted when the fake's deleted map
+		// carries a marker for its id. Excluded by default; included (and carrying
+		// its DeletedAt) only when IncludeDeleted is set.
+		if del, ok := f.deleted[fl.ID]; ok {
+			if !filter.IncludeDeleted {
+				continue
+			}
+			d := del
+			fl.DeletedAt = &d
 		}
 		out = append(out, fl)
 	}

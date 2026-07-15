@@ -32,7 +32,7 @@ func freshPool(t *testing.T, ctx context.Context) (*pgxpool.Pool, *Store) {
 		t.Fatalf("ping: %v", err)
 	}
 	// Reset schema so migrate/seed are exercised deterministically.
-	for _, tbl := range []string{"execution_steps", "executions", "connections", "flow_versions", "flows", "folders", "schema_migrations"} {
+	for _, tbl := range []string{"execution_steps", "executions", "connections", "flow_grants", "flow_versions", "flows", "folders", "schema_migrations"} {
 		if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+tbl+" CASCADE"); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
