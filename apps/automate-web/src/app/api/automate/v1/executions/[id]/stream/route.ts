@@ -13,7 +13,8 @@ function frame(run: Execution): Uint8Array {
   return encoder.encode(`data: ${JSON.stringify(run)}\n\n`);
 }
 
-export function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const base = executions.find((e) => e.id === params.id);
 
   const stream = new ReadableStream({
