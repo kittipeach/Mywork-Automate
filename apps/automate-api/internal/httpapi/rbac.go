@@ -25,6 +25,11 @@ type authDeps struct {
 	service *auth.Service
 	log     func(msg string, kv ...any)
 	audit   audit.Service
+	// protected marks a sit/uat/prod environment. When true, resolveRole fails
+	// closed (401) for a request that resolves no identity instead of granting
+	// the dev default role — a banking-grade deny-by-default posture. It is false
+	// for dev (and in the zero authDeps used by tests), preserving local flows.
+	protected bool
 }
 
 // resolveRole is middleware that determines the caller's effective role and
@@ -39,17 +44,30 @@ type authDeps struct {
 // An invalid/expired/forged bearer token does not 401 here; it simply falls
 // through to the header/default path (per the E2-S3 "bad-JWT → falls back"
 // requirement). Per-route RequirePermission is what actually denies access.
+//
+// The one hard stop is a protected environment (sit/uat/prod) in which no
+// identity resolves at all: rather than fall back to the dev default role,
+// resolveRole aborts 401. This closes the fail-open where an unauthenticated
+// caller (or one whose token failed to verify and who sent no gateway-injected
+// X-Role) would otherwise be handed the default admin role.
 func resolveRole(deps authDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role := roleFromContext(deps, c)
+		role, ok := roleFromContext(deps, c)
+		if !ok {
+			errorEnvelope(c, http.StatusUnauthorized, "unauthorized", "authentication required")
+			c.Abort()
+			return
+		}
 		c.Set(ctxRoleKey, role)
 		c.Next()
 	}
 }
 
-// roleFromContext applies the resolution order described on resolveRole and
-// returns the effective authz.Role.
-func roleFromContext(deps authDeps, c *gin.Context) authz.Role {
+// roleFromContext applies the resolution order described on resolveRole. The
+// second return is false only when no identity could be resolved in a protected
+// environment — the caller (resolveRole) then denies with 401. In dev the
+// default role is always resolved (ok=true) so local flows keep working.
+func roleFromContext(deps authDeps, c *gin.Context) (authz.Role, bool) {
 	if deps.service != nil {
 		if tok := bearerToken(c); tok != "" {
 			if claims, err := deps.service.Verify(tok); err == nil {
@@ -58,7 +76,7 @@ func roleFromContext(deps authDeps, c *gin.Context) authz.Role {
 					candidates = append(candidates, authz.Role(r))
 				}
 				if best, ok := authz.Highest(candidates); ok {
-					return best
+					return best, true
 				}
 			}
 		}
@@ -66,16 +84,23 @@ func roleFromContext(deps authDeps, c *gin.Context) authz.Role {
 
 	if hdr := c.GetHeader(roleHeader); hdr != "" {
 		if r := authz.Role(hdr); authz.IsValidRole(r) {
-			return r
+			return r, true
 		}
 		// An unknown X-Role (e.g. "auditor") is honoured as-is: it is not a valid
 		// role, so RequirePermission denies everything (deny-by-default), and the
 		// connection RBAC filter treats it as seeing nothing. This preserves the
-		// existing "unknown role sees none" behaviour.
-		return authz.Role(hdr)
+		// existing "unknown role sees none" behaviour. It still counts as a
+		// resolved identity (the caller supplied a role), so it is denied with
+		// 403 by the per-route gate rather than 401 here.
+		return authz.Role(hdr), true
 	}
 
-	return authz.Role(defaultRole)
+	// No token and no X-Role. In a protected env this is an unauthenticated
+	// request: fail closed. In dev, fall back to the default role.
+	if deps.protected {
+		return "", false
+	}
+	return authz.Role(defaultRole), true
 }
 
 // bearerToken extracts the token from an `Authorization: Bearer <token>` header,

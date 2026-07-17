@@ -83,7 +83,7 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 
 	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger, querier: querier, mask: maskEng, notifier: notifier}
 
-	deps := authDeps{service: authCfg.Service, audit: auditSvc}
+	deps := authDeps{service: authCfg.Service, audit: auditSvc, protected: cfg.IsProtectedEnv()}
 	if authCfg.Logger != nil {
 		log := authCfg.Logger
 		deps.log = func(msg string, kv ...any) { log.Info(msg, kv...) }

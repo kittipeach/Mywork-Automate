@@ -253,6 +253,42 @@ func TestCallerRole_FallbackWhenUnset(t *testing.T) {
 	}
 }
 
+// TestResolveRole_ProtectedEnvFailsClosed proves the auth fail-open is closed:
+// in a protected environment (sit/uat/prod) a request that resolves no identity
+// must be rejected (401), NOT silently granted the dev default admin role. A
+// gateway-injected X-Role is still honoured, and per-route RBAC still applies to
+// a resolved-but-insufficient role (403, not 401).
+func TestResolveRole_ProtectedEnvFailsClosed(t *testing.T) {
+	fake := seedFake()
+	fake.def = sampleDef()
+	prod := NewRouter(config.Config{Env: config.EnvProd, FileStore: config.FileStoreLocal},
+		fake, &fakeRunner{}, nil, nil, AuthConfig{}, nil, nil)
+
+	// No token, no X-Role → unauthenticated → 401 (was 200-as-admin, the bug).
+	if w := doRoleReq(t, prod, http.MethodGet, APIBasePath+"/flows", "", ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("protected anonymous GET /flows = %d, want 401", w.Code)
+	}
+	// admin-only surface, anonymous → 401 (never reaches the handler).
+	if w := doRoleReq(t, prod, http.MethodGet, APIBasePath+"/audit-logs", "", ""); w.Code != http.StatusUnauthorized {
+		t.Errorf("protected anonymous GET /audit-logs = %d, want 401", w.Code)
+	}
+	// Gateway-injected identity is honoured: valid X-Role → allowed.
+	if w := doRoleReq(t, prod, http.MethodGet, APIBasePath+"/flows", "admin", ""); w.Code != http.StatusOK {
+		t.Errorf("protected X-Role=admin GET /flows = %d, want 200", w.Code)
+	}
+	// Resolved-but-insufficient role → 403 (RBAC), not 401.
+	if w := doRoleReq(t, prod, http.MethodPost, APIBasePath+"/flows", "viewer", `{"name":"X"}`); w.Code != http.StatusForbidden {
+		t.Errorf("protected X-Role=viewer POST /flows = %d, want 403", w.Code)
+	}
+
+	// Dev env is unchanged: no identity still falls back to the admin default so
+	// local development and existing read flows keep working.
+	dev := rbacRouter()
+	if w := doRoleReq(t, dev, http.MethodGet, APIBasePath+"/flows", "", ""); w.Code != http.StatusOK {
+		t.Errorf("dev anonymous GET /flows = %d, want 200 (admin default)", w.Code)
+	}
+}
+
 // --- helpers ---
 
 func allRoles() map[string]bool {
