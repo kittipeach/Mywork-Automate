@@ -17,7 +17,9 @@ package masking
 
 import (
 	"crypto/sha256"
+	"database/sql/driver"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -370,6 +372,24 @@ func stringify(v any) (string, bool) {
 		return strconv.FormatFloat(float64(n), 'g', -1, 32), true
 	case float64:
 		return strconv.FormatFloat(n, 'g', -1, 64), true
+	case json.Number:
+		// JSON-decoded numerics (decoder.UseNumber) carry their exact text.
+		return n.String(), true
+	case fmt.Stringer:
+		// Any value with a canonical string form (e.g. time.Time).
+		return n.String(), true
+	case driver.Valuer:
+		// Database-sourced values that are neither native Go numerics nor
+		// strings — notably pgx's pgtype.Numeric for a Postgres numeric column,
+		// which a bank's salary/amount columns use. Without this a StyleFull rule
+		// silently passed the raw value through (the value was not recognised as
+		// maskable), leaking sensitive numerics into previews and logs. Recurse
+		// on the driver value so its string/numeric form is masked.
+		dv, err := n.Value()
+		if err != nil || dv == nil {
+			return "", false
+		}
+		return stringify(dv)
 	default:
 		return "", false
 	}
