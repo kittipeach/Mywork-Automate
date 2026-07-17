@@ -106,7 +106,9 @@ function Field({
   availableNodes,
 }: {
   field: FieldSpec;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // react-hook-form's Control is intentionally type-erased here (the form shape
+  // is dynamic, driven by the node schema); core-web-vitals does not enforce
+  // no-explicit-any so no disable directive is needed.
   control: any;
   formId: string;
   error?: string;

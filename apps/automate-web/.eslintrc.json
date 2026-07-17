@@ -1,0 +1,18 @@
+{
+  "root": true,
+  "extends": "next/core-web-vitals",
+  "ignorePatterns": [
+    ".next/",
+    "node_modules/",
+    "coverage/",
+    "next-env.d.ts"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "react/display-name": "off"
+      }
+    }
+  ]
+}
