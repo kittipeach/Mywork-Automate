@@ -18,7 +18,7 @@ type evaluator struct {
 // sandbox can never run unbounded.
 func (ev *evaluator) step() error {
 	if err := ev.ctx.Err(); err != nil {
-		return fmt.Errorf("%w: evaluation timeout exceeded: %v", ErrEval, err)
+		return fmt.Errorf("%w: evaluation timeout exceeded: %w", ErrEval, err)
 	}
 	ev.budget--
 	if ev.budget < 0 {

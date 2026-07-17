@@ -1,0 +1,42 @@
+# Docker build context is the repo root. Keep it small and deterministic:
+# ship only the Go sources needed to build the two binaries.
+
+# VCS / tooling
+.git
+.github
+.gitignore
+.gitleaks.toml
+
+# Frontend — never part of a Go image, and node_modules is huge.
+apps/automate-web
+
+# Deploy / infra / docs — not needed inside the build.
+deploy
+docs
+scripts
+docker-compose*.yml
+Makefile
+
+# Editors / OS cruft
+.vscode
+.idea
+.DS_Store
+
+# Test / coverage artifacts
+**/*_test.go
+coverage
+coverage.out
+*.out
+
+# Local secrets (must never enter an image) — see docs/spec/04 §2.6
+secrets.local.yaml
+*.local.yaml
+
+# Dockerfiles themselves and any local build output
+**/Dockerfile
+.dockerignore
+/out
+
+# Locally-built host binaries (darwin/arm64) — must never enter a linux image.
+/bin
+dist

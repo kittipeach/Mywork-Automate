@@ -2,7 +2,9 @@ package masking
 
 import (
 	"crypto/sha256"
+	"database/sql/driver"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -226,6 +228,85 @@ func TestMaskItems_FloatWithFractionUsesStrconv(t *testing.T) {
 	got := maskOne(t, e, "n", float64(1234.5), PointPreview, nil)
 	if got != "**34.5" {
 		t.Errorf("got %v, want %v", got, "**34.5")
+	}
+}
+
+// pgNumeric mimics a driver database value (e.g. pgx's pgtype.Numeric): it is
+// not a native Go numeric/string, but it stringifies to a number via
+// driver.Valuer. Sensitive numeric DB columns (salary) arrive as this shape at
+// runtime, so the engine must mask them rather than pass them through.
+type pgNumeric struct{ s string }
+
+func (n pgNumeric) Value() (driver.Value, error) { return n.s, nil }
+
+// stringerVal implements fmt.Stringer only.
+type stringerVal struct{ s string }
+
+func (v stringerVal) String() string { return v.s }
+
+// errValuer / nilValuer are driver.Valuers whose Value() cannot yield a usable
+// string (error, or a nil driver value). The engine treats them as
+// non-stringifiable and, per the long-standing contract, leaves them untouched.
+type errValuer struct{}
+
+func (errValuer) Value() (driver.Value, error) { return nil, fmt.Errorf("boom") }
+
+type nilValuer struct{}
+
+func (nilValuer) Value() (driver.Value, error) { return nil, nil }
+
+func TestMaskItems_ValuerUnusableLeftAsIs(t *testing.T) {
+	e := mustEngine(t, []Rule{
+		{Name: "full", MatchType: MatchColumnName, Pattern: "(?i)^salary$", Style: StyleFull, AppliesTo: []Point{PointPreview}, Active: true},
+	})
+	for _, v := range []any{errValuer{}, nilValuer{}} {
+		got := maskOne(t, e, "salary", v, PointPreview, nil)
+		if _, isString := got.(string); isString {
+			t.Errorf("unusable valuer %T should be left as-is, got string %v", v, got)
+		}
+	}
+}
+
+// TestMaskItems_ExoticNumericFullMask proves the runtime salary leak is fixed:
+// a Postgres numeric column arrives as a driver.Valuer (pgtype.Numeric), not a
+// native Go numeric, and must be masked by a StyleFull rule. fmt.Stringer and
+// json.Number — the other shapes DB/JSON values take — are covered too.
+func TestMaskItems_ExoticNumericFullMask(t *testing.T) {
+	e := mustEngine(t, []Rule{
+		{Name: "full", MatchType: MatchColumnName, Pattern: "(?i)^salary$", Style: StyleFull, AppliesTo: []Point{PointPreview}, Active: true},
+	})
+	for _, v := range []any{
+		pgNumeric{"85000"},   // driver.Valuer (pgtype.Numeric-like) — the real salary leak
+		stringerVal{"85000"}, // fmt.Stringer
+		json.Number("85000"), // encoding/json numeric
+	} {
+		got := maskOne(t, e, "salary", v, PointPreview, nil)
+		if got != maskToken {
+			t.Errorf("StyleFull leaked %T: got %v, want %q", v, got, maskToken)
+		}
+	}
+}
+
+// TestMaskItems_ExoticNumericPartialHash proves the partial/hash styles now
+// format DB-sourced exotic numerics correctly (stringified via driver.Valuer /
+// fmt.Stringer) instead of leaking them.
+func TestMaskItems_ExoticNumericPartialHash(t *testing.T) {
+	part := mustEngine(t, []Rule{
+		{Name: "l4", MatchType: MatchColumnName, Pattern: "(?i)^acct$", Style: StylePartialLast4, AppliesTo: []Point{PointPreview}, Active: true},
+	})
+	if got := maskOne(t, part, "acct", pgNumeric{"1234567"}, PointPreview, nil); got != "***4567" {
+		t.Errorf("partial pgNumeric: got %v, want ***4567", got)
+	}
+	if got := maskOne(t, part, "acct", stringerVal{"1234567"}, PointPreview, nil); got != "***4567" {
+		t.Errorf("partial stringer: got %v, want ***4567", got)
+	}
+
+	hash := mustEngine(t, []Rule{
+		{Name: "h", MatchType: MatchColumnName, Pattern: "(?i)^acct$", Style: StyleHash, AppliesTo: []Point{PointPreview}, Active: true},
+	})
+	got := maskOne(t, hash, "acct", pgNumeric{"85000"}, PointPreview, nil)
+	if s, ok := got.(string); !ok || len(s) != 64 {
+		t.Errorf("hash pgNumeric: got %v (%T), want 64-hex sha256", got, got)
 	}
 }
 

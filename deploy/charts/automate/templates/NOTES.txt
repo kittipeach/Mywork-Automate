@@ -1,0 +1,25 @@
+MyWork Automate ({{ .Chart.AppVersion }}) deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  - {{ include "automate.api.fullname" . }}     (Deployment + Service :{{ .Values.api.service.port }}, /healthz /readyz)
+  - {{ include "automate.worker.fullname" . }}  (Deployment, no Service)
+{{- if .Values.postgres.enabled }}
+  - {{ include "automate.postgres.fullname" . }} (DEV-ONLY Postgres :{{ .Values.postgres.service.port }}) — NOT FOR PRODUCTION
+{{- end }}
+{{- if .Values.temporal.enabled }}
+  - {{ include "automate.temporal.fullname" . }} (DEV-ONLY Temporal :{{ .Values.temporal.service.grpcPort }} / UI :{{ .Values.temporal.service.uiPort }}) — NOT FOR PRODUCTION
+{{- end }}
+
+Environment (APP_ENV): {{ .Values.app.env }}
+Local auth (AUTH_LOCAL_ENABLED): {{ .Values.app.authLocalEnabled }}
+DATABASE_URL: {{ if include "automate.databaseUrl" . }}(set){{ else }}(EMPTY — set app.databaseUrl or enable postgres){{ end }}
+TEMPORAL_HOSTPORT: {{ if include "automate.temporalHostPort" . }}{{ include "automate.temporalHostPort" . }}{{ else }}(EMPTY — set app.temporalHostPort or enable temporal){{ end }}
+
+Check readiness:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "automate.api.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "automate.api.fullname" . }} {{ .Values.api.service.port }}:{{ .Values.api.service.port }}
+  curl localhost:{{ .Values.api.service.port }}/healthz
+{{- if .Values.ingress.enabled }}
+
+Ingress: http://{{ .Values.ingress.host }}{{ .Values.ingress.path }} (className {{ .Values.ingress.className }})
+{{- end }}

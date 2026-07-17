@@ -39,7 +39,7 @@ func Validate(sql string) error {
 
 	result, err := pg.Parse(sql)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrParse, err)
+		return fmt.Errorf("%w: %w", ErrParse, err)
 	}
 
 	// pg_query yields zero statements for comment-only or bare-semicolon input

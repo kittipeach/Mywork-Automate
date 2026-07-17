@@ -1,0 +1,170 @@
+# Default values for the automate chart.
+# Per-environment overrides live in values-<env>.yaml (dev/sit/uat/prod).
+#
+# Security note (docs/spec/07 §1.2): app.authLocalEnabled MUST be "false" in
+# sit/uat/prod. scripts/policy-check-local-auth.sh enforces this at CI time and
+# internal/config enforces it at runtime (the app refuses to start otherwise).
+
+# nameOverride / fullnameOverride tweak generated resource names.
+nameOverride: ""
+fullnameOverride: ""
+
+# Target namespace is passed at install time (helm -n automate ...). The chart
+# does not create the namespace itself.
+
+image:
+  # Images are built locally and loaded into kind via `kind load docker-image`
+  # (no registry), so pullPolicy is IfNotPresent and repositories are bare names.
+  pullPolicy: IfNotPresent
+  api:
+    repository: automate-api
+    tag: dev
+  worker:
+    repository: automate-worker
+    tag: dev
+
+imagePullSecrets: []
+
+serviceAccount:
+  # Create a dedicated ServiceAccount for the workloads.
+  create: true
+  name: ""
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Application configuration — maps 1:1 to the env contract read by
+# internal/config (APP_ENV, HTTP_ADDR, DATABASE_URL, TEMPORAL_HOSTPORT,
+# FILE_STORE, AUTH_LOCAL_ENABLED).
+# ---------------------------------------------------------------------------
+app:
+  # APP_ENV: dev | sit | uat | prod
+  env: dev
+  # HTTP_ADDR for the API server.
+  httpAddr: ":8080"
+  # FILE_STORE: local | azureblob
+  fileStore: local
+  # AUTH_LOCAL_ENABLED (string "true"/"false"). MUST be "false" in sit/uat/prod.
+  authLocalEnabled: "false"
+  # DATABASE_URL / TEMPORAL_HOSTPORT.
+  # When postgres.enabled / temporal.enabled are true (dev), the templates
+  # default these to the in-cluster services if left empty. In sit/uat/prod
+  # they are supplied explicitly (managed Postgres / shared Temporal).
+  databaseUrl: ""
+  temporalHostPort: ""
+  # Extra environment variables applied to both api and worker.
+  extraEnv: []
+  #  - name: LOG_LEVEL
+  #    value: info
+
+# ---------------------------------------------------------------------------
+# automate-api — Deployment + Service (ClusterIP :8080).
+# ---------------------------------------------------------------------------
+api:
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  # Pod-level security hardening; the API can run with a read-only root fs and
+  # a small emptyDir for /tmp.
+  readOnlyRootFilesystem: true
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# automate-worker — Deployment only (no Service). Memory limit 2Gi
+# (docs/spec/04 §4: stream file gen).
+# ---------------------------------------------------------------------------
+worker:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  # The worker binary is dynamically linked (cgo); a read-only root fs is safe
+  # but defaulted off to leave room for temp scratch during file generation.
+  readOnlyRootFilesystem: false
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# Ingress for the API (ingress-nginx is installed in the target kind cluster).
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: automate.local
+  path: /
+  pathType: Prefix
+  tls: []
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy (docs/spec/04 §4, docs/spec/07 §3): restrict traffic to the api.
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# DEV-ONLY in-cluster Postgres. NOT FOR PRODUCTION — sit/uat/prod use a managed
+# PostgreSQL (Azure Flexible Server) via app.databaseUrl. Gated off by default.
+# ---------------------------------------------------------------------------
+postgres:
+  enabled: false
+  image: postgres:16-alpine
+  auth:
+    username: automate
+    password: automate
+    database: automate
+  service:
+    port: 5432
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # PVC-less: uses an emptyDir so the demo is fully ephemeral.
+  persistence:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# DEV-ONLY in-cluster Temporal dev server. NOT FOR PRODUCTION — sit/uat/prod use
+# a shared/managed Temporal via app.temporalHostPort. Gated off by default.
+# ---------------------------------------------------------------------------
+temporal:
+  enabled: false
+  image: temporalio/temporal:latest
+  namespace: automate
+  service:
+    grpcPort: 7233
+    uiPort: 8233
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* MyWork enterprise palette — banking-grade, calm and data-dense. */
+:root {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --brand: 234 89% 60%;        /* indigo 600 */
+  --brand-fg: 0 0% 100%;
+  --brand-muted: 234 89% 96%;
+  --brand-50: 234 100% 97%;
+  --brand-100: 234 96% 93%;
+  --brand-600: 234 89% 60%;
+  --brand-700: 234 72% 52%;
+
+  --surface: 0 0% 100%;
+  --surface-sunken: 220 20% 97%;
+  --surface-raised: 0 0% 100%;
+
+  --sidebar: 222 47% 11%;      /* slate 900 navy */
+  --sidebar-fg: 210 20% 92%;
+  --sidebar-muted: 215 20% 65%;
+  --sidebar-active: 234 89% 60%;
+
+  --border: 220 16% 90%;
+  --ink: 222 34% 16%;
+  --ink-muted: 220 12% 42%;
+  --ink-subtle: 220 12% 60%;
+
+  --success: 142 71% 40%;
+  --warning: 32 90% 45%;
+  --danger: 0 72% 51%;
+  --info: 234 89% 60%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: hsl(var(--surface-sunken));
+  color: hsl(var(--ink));
+  -webkit-font-smoothing: antialiased;
+}
+
+/* React Flow surface tuned to the design system */
+.react-flow__attribution {
+  display: none;
+}

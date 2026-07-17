@@ -1,7 +1,7 @@
-// Package worker bootstraps the automate-worker Temporal worker
-// (docs/spec/04 §2.3). E1-S1 provides the config-driven bootstrap summary;
-// the Temporal client, interpreter workflow and activity registration land in
-// E1-S7.
+// Package worker holds the automate-worker's shared constants and the
+// config-driven bootstrap summary (docs/spec/04 §2.3). The runtime wiring that
+// dials Temporal and serves the task queue lives in the composition root
+// (cmd/worker), since it can only be exercised by an integration environment.
 package worker
 
 import (
@@ -12,6 +12,9 @@ import (
 
 // TaskQueue is the Temporal task queue automate workflows/activities use.
 const TaskQueue = "automate-task-queue"
+
+// Namespace is the dedicated Temporal namespace for automate (spec 04 §4).
+const Namespace = "automate"
 
 // Bootstrap describes the worker's resolved runtime wiring. It is returned
 // (rather than acted on) so it can be asserted in tests before any Temporal
