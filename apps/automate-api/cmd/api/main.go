@@ -49,7 +49,7 @@ func getenv(key, def string) string {
 // devJWTSecret is used only when AUTH_LOCAL_ENABLED=true and AUTH_JWT_SECRET is
 // unset — i.e. local dev. The config guard already prevents local auth from
 // running in protected environments, so this default can never apply there.
-const devJWTSecret = "dev-only-insecure-jwt-secret-change-me"
+const devJWTSecret = "dev-only-insecure-jwt-secret-change-me" //nolint:gosec // G101: dev-only default, unreachable in protected envs (config guard)
 
 // buildAuthConfig wires the local-auth service when local auth is enabled and
 // permitted. When disabled it returns a zero AuthConfig; the RBAC middleware

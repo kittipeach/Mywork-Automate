@@ -183,7 +183,7 @@ func (c *sftpClient) Upload(_ context.Context, remotePath string, r io.Reader) e
 		// TODO(E8-S1 integration): pin the host key from Key Vault
 		// (ssh.FixedHostKey) instead of trusting on first use. InsecureIgnoreHostKey
 		// is only acceptable against the sftp-mock in dev.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // G106: dev sftp-mock only; host-key pinning tracked in the TODO above (E8-S1)
 		Timeout:         30 * time.Second,
 	}
 	conn, err := ssh.Dial("tcp", c.addr, sshCfg)

@@ -115,7 +115,7 @@ func TestService_Authenticate_SuccessResetsFailureCounter(t *testing.T) {
 	svc, email, pw := newTestService(t, clk.now)
 	// 4 bad attempts, then a good one, then 4 more bad ones must not lock.
 	for i := 0; i < 4; i++ {
-		svc.Authenticate(email, "bad-000000000")
+		_, _, _ = svc.Authenticate(email, "bad-000000000")
 	}
 	if _, _, err := svc.Authenticate(email, pw); err != nil {
 		t.Fatalf("good login: %v", err)

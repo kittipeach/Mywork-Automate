@@ -9,6 +9,7 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mywork/automate/internal/flowspec"
 )
@@ -118,8 +119,8 @@ func NewNotFound(msg string) error { return notFoundError{msg: msg} }
 
 // IsNotFound reports whether err was produced by NewNotFound.
 func IsNotFound(err error) bool {
-	_, ok := err.(notFoundError)
-	return ok
+	var nf notFoundError
+	return errors.As(err, &nf)
 }
 
 // ConnectionInput carries the mutable fields when creating or updating a

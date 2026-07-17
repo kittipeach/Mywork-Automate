@@ -52,7 +52,7 @@ func activityOptionsFor(retry *RetryPolicy) workflow.ActivityOptions {
 	initialInterval := defaultInitialInterval
 	if retry != nil {
 		if retry.MaxAttempts > 0 {
-			maxAttempts = int32(retry.MaxAttempts)
+			maxAttempts = int32(retry.MaxAttempts) //nolint:gosec // G115: MaxAttempts is a small, validated retry count
 		}
 		if retry.InitialIntervalSeconds > 0 {
 			initialInterval = time.Duration(retry.InitialIntervalSeconds) * time.Second

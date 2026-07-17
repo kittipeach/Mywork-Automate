@@ -28,7 +28,7 @@ func newTestTracer(t *testing.T) (trace.Tracer, *tracetest.InMemoryExporter) {
 func attrsOf(kvs []attribute.KeyValue) map[string]string {
 	m := make(map[string]string, len(kvs))
 	for _, kv := range kvs {
-		m[string(kv.Key)] = kv.Value.Emit()
+		m[string(kv.Key)] = kv.Value.String()
 	}
 	return m
 }
@@ -215,7 +215,7 @@ func TestNewResource_HasServiceName(t *testing.T) {
 	found := ""
 	for _, kv := range res.Attributes() {
 		if string(kv.Key) == "service.name" {
-			found = kv.Value.Emit()
+			found = kv.Value.String()
 		}
 	}
 	if found != "svc-name-here" {

@@ -72,7 +72,7 @@ func VerifyPassword(plaintext, encodedHash string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	computed := argon2.IDKey([]byte(plaintext), salt, params.time, params.memory, params.threads, uint32(len(hash)))
+	computed := argon2.IDKey([]byte(plaintext), salt, params.time, params.memory, params.threads, uint32(len(hash))) //nolint:gosec // G115: len(hash) is a fixed 32-byte argon2 digest; cannot overflow uint32
 	// subtle.ConstantTimeCompare returns 1 only when both length and bytes match.
 	if subtle.ConstantTimeCompare(hash, computed) == 1 {
 		return true, nil

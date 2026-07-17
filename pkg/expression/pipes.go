@@ -77,7 +77,7 @@ func pipeFormat(v any, args []any) (any, error) {
 	}
 	t, err := asTime(v)
 	if err != nil {
-		return nil, fmt.Errorf("%w: format expects a time value: %v", ErrEval, err)
+		return nil, fmt.Errorf("%w: format expects a time value: %w", ErrEval, err)
 	}
 	return t.Format(layout), nil
 }
@@ -93,11 +93,11 @@ func pipeTz(v any, args []any) (any, error) {
 	}
 	t, err := asTime(v)
 	if err != nil {
-		return nil, fmt.Errorf("%w: tz expects a time value: %v", ErrEval, err)
+		return nil, fmt.Errorf("%w: tz expects a time value: %w", ErrEval, err)
 	}
 	loc, err := time.LoadLocation(zone)
 	if err != nil {
-		return nil, fmt.Errorf("%w: unknown timezone %q: %v", ErrEval, zone, err)
+		return nil, fmt.Errorf("%w: unknown timezone %q: %w", ErrEval, zone, err)
 	}
 	return t.In(loc), nil
 }
@@ -113,7 +113,7 @@ func pipeAddDays(v any, args []any) (any, error) {
 	}
 	t, err := asTime(v)
 	if err != nil {
-		return nil, fmt.Errorf("%w: addDays expects a time value: %v", ErrEval, err)
+		return nil, fmt.Errorf("%w: addDays expects a time value: %w", ErrEval, err)
 	}
 	return t.AddDate(0, 0, int(n)), nil
 }
@@ -134,7 +134,7 @@ func pipeNumber(v any, args []any) (any, error) {
 	}
 	f, err := toFloat(v)
 	if err != nil {
-		return nil, fmt.Errorf("%w: number expects a numeric value: %v", ErrEval, err)
+		return nil, fmt.Errorf("%w: number expects a numeric value: %w", ErrEval, err)
 	}
 	return strconv.FormatFloat(f, 'f', decimals, 64), nil
 }
@@ -261,7 +261,7 @@ func reduceNumbers(v any, args []any, name string) (float64, int, error) {
 		}
 		f, err := toFloat(num)
 		if err != nil {
-			return 0, 0, fmt.Errorf("%w: %s requires numeric values: %v", ErrEval, name, err)
+			return 0, 0, fmt.Errorf("%w: %s requires numeric values: %w", ErrEval, name, err)
 		}
 		total += f
 	}

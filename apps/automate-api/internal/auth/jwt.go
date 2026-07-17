@@ -93,7 +93,7 @@ func (ti *TokenIssuer) Verify(tokenStr string) (*Claims, error) {
 		return ti.secret, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
 	return claims, nil
 }

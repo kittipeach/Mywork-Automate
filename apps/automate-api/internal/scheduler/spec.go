@@ -130,7 +130,7 @@ func parseConfig(raw json.RawMessage) (scheduleConfig, error) {
 		return cfg, nil
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return scheduleConfig{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		return scheduleConfig{}, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	return cfg, nil
 }
