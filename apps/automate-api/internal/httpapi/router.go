@@ -109,6 +109,9 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	if authCfg.Service != nil {
 		v1.POST("/auth/local/login", ah.localLogin)
 	}
+	// Logout clears the SSO auth cookie; always available (no role, no service
+	// dependency) so a browser session can be ended regardless of auth mode.
+	v1.POST("/auth/logout", ah.logout)
 
 	// Everything below resolves the caller's role (JWT → X-Role → defaultRole)
 	// and is then guarded per route by RequirePermission (deny-by-default).

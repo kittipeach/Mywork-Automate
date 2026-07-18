@@ -83,11 +83,31 @@ func (h *authHandlers) localLogin(c *gin.Context) {
 		"ip", c.ClientIP(), "userAgent", c.Request.UserAgent())
 	h.recordAuth(c, audit.Entry{Action: audit.ActionAuthLogin, UserID: res.UserID,
 		Role: highestRoleStr(res.Roles), Detail: map[string]any{"email": body.Email}})
+	// Set the SSO auth cookie so a browser is authenticated on subsequent requests
+	// without a JS-managed bearer header. The token is also returned in the body
+	// for API/CLI clients that prefer the Authorization header.
+	h.setAuthCookie(c, res.Token)
 	c.JSON(http.StatusOK, gin.H{
 		"token":  res.Token,
 		"userId": res.UserID,
 		"roles":  res.Roles,
 	})
+}
+
+// setAuthCookie writes the JWT to an HttpOnly cookie. Secure is set in protected
+// environments (HTTPS); SameSite=Lax lets top-level SSO redirects carry it while
+// blocking cross-site sends. HttpOnly keeps it out of reach of page JavaScript.
+func (h *authHandlers) setAuthCookie(c *gin.Context, token string) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(authTokenCookie, token, int(authCookieTTL.Seconds()), "/", "", h.deps.protected, true)
+}
+
+// logout → POST /auth/logout. Clears the SSO auth cookie. Safe to call
+// unauthenticated (it only expires the cookie); no role is required.
+func (h *authHandlers) logout(c *gin.Context) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(authTokenCookie, "", -1, "/", "", h.deps.protected, true)
+	c.JSON(http.StatusOK, gin.H{"status": "logged_out"})
 }
 
 // me → GET /me. Returns the caller's resolved role and effective permissions
