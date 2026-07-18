@@ -155,7 +155,46 @@ Temporal UI: <http://localhost:8233> · Mailhog UI: <http://localhost:8025>.
 | `FILE_DIR` | (worker default) | worker | Local file store dir when `FILE_STORE=local`. |
 | `SMTP_ADDR` / `SMTP_FROM` | `localhost:1025` | worker | Email delivery (Mailhog in dev). |
 | `SFTP_ADDR` / `SFTP_USER` / `SFTP_PASSWORD` | empty | worker | MFT/SFTP delivery target (empty ⇒ delivery.mft errors clearly). |
+| `SECRETS_FILE` | `secrets.local.yaml` | api, worker | Dev secret store (gitignored YAML). Holds external-DB connection passwords; Key Vault replaces it in prod. |
 | `NEXT_PUBLIC_API_BASE` | `/api/automate/v1` | web (build/dev) | Point the UI at the real API, e.g. `http://localhost:8080/api/automate/v1`. |
+
+## 6b. Configure an external database connection (admin)
+
+A flow's `db.query` node reads from an **external** database defined as a
+*connection*. Create one via the admin API (or the Connections UI). The password
+is saved to the secret store (`secrets.local.yaml` in dev, Key Vault in prod) — the
+connection row only stores its `secretRef`, never the password.
+
+```bash
+BASE=localhost:8080/api/automate/v1
+TOKEN=...   # admin JWT from §5
+
+# create a Postgres connection (dev: pass a raw password → saved to the secret store)
+CID=$(curl -s -X POST $BASE/connections -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{
+  "name":"HR Postgres","type":"postgres","host":"hr-db.internal","port":5432,
+  "database":"hr","username":"reader","password":"CHANGE_ME","sslMode":"disable",
+  "allowedRoles":["admin","designer"]
+}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+# live reachability probe (dials the DB, runs SELECT 1)
+curl -s -X POST $BASE/connections/$CID/test -H "Authorization: Bearer $TOKEN"
+#   → {"status":"ok","message":"connected"}   (or status:"error" with a reason)
+```
+
+In production set `secretRef` to an existing Key Vault secret name and omit
+`password`. A flow's `db.query` node references the connection via `connectionId`;
+at run start the API injects the dial fields and the worker dials a dedicated pool
+for that connection (SELECT-only guard + masking still apply).
+
+## 6c. SSO / session auth
+
+Identity is resolved from a **Bearer JWT** (`Authorization: Bearer …`) or, when
+absent, the **`mw_access_token` cookie** — so an SSO-authenticated browser session
+works without a JS-managed header. `POST /auth/local/login` sets that cookie
+(HttpOnly, SameSite=Lax, `Secure` in sit/uat/prod) in addition to returning the
+token; `POST /auth/logout` clears it. In protected environments a request that
+resolves no identity **fails closed with 401** (front the API with a gateway that
+validates the user and injects a trusted `X-Role`, or issues the app JWT cookie).
 
 ## 7. Deploying to a protected environment (sit/uat/prod)
 
