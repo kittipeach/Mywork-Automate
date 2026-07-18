@@ -839,3 +839,13 @@ func seedFile(t *testing.T, fs *fakeFileStore, path, content, filename, format s
 
 // Compile-time proof that secrets.Resolver is the interface we stub.
 var _ secrets.Resolver = stubResolver{}
+
+func TestExecuteNode_TriggerPassThrough(t *testing.T) {
+	a := newTestActivities(t, stubQuerier{})
+	in := []map[string]any{{"n": 1}}
+	for _, typ := range []string{"trigger.manual", "trigger.schedule", "noop"} {
+		res, err := a.ExecuteNode(context.Background(), NodeExecRequest{NodeID: "t", Type: typ, InItems: in})
+		require.NoError(t, err, "type %s should pass through, not error", typ)
+		require.Equal(t, in, res.Items, "type %s should pass items through unchanged", typ)
+	}
+}

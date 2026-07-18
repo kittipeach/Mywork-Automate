@@ -172,8 +172,11 @@ func (a *Activities) ExecuteNode(ctx context.Context, r NodeExecRequest) (NodeEx
 		return a.execDeliveryDownload(ctx, r)
 	case "delivery.mft":
 		return a.execDeliveryMFT(ctx, r)
-	case "trigger.manual", "noop":
-		// Pass incoming items through with no side effects.
+	case "trigger.manual", "trigger.schedule", "noop":
+		// Trigger/no-op nodes are graph entry points that define WHEN a flow runs,
+		// not a runtime step — they pass incoming items through with no side
+		// effects. trigger.schedule must be here too, or a scheduled (or manually
+		// re-run) flow would fail at its own entry node.
 		return NodeExecResult{Items: r.InItems}, nil
 	default:
 		return NodeExecResult{}, fmt.Errorf("interpreter: unknown node type %q", r.Type)
