@@ -9,6 +9,7 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/internal/config"
+	"github.com/mywork/automate/internal/flowspec"
 	"github.com/mywork/automate/pkg/secrets"
 )
 
@@ -160,3 +161,61 @@ func containsWord(s, w string) bool {
 	}
 	return false
 }
+
+func TestResolveConnections_InjectsDialFields(t *testing.T) {
+	fake := seedFake()
+	fake.conns = []store.Connection{{
+		ID: "conn_ext", Type: "postgres", Host: "ext-db", Port: 6000,
+		Database: "hr", Username: "reader", SSLMode: "require", SecretRef: "pw",
+	}}
+	h := &handlers{store: fake}
+	def := flowspec.FlowDef{Nodes: []flowspec.NodeDef{
+		{ID: "q1", Type: "db.query", Config: mustRaw(`{"connectionId":"conn_ext","sql":"SELECT 1"}`)},
+		{ID: "n2", Type: "logic.if", Config: mustRaw(`{"left":"rowCount"}`)}, // untouched
+	}}
+	out, err := h.resolveConnections(context.Background(), def)
+	if err != nil {
+		t.Fatalf("resolveConnections: %v", err)
+	}
+	var cfg map[string]any
+	_ = json.Unmarshal(out.Nodes[0].Config, &cfg)
+	if cfg["connHost"] != "ext-db" || cfg["connDatabase"] != "hr" || cfg["connUsername"] != "reader" ||
+		cfg["connSslMode"] != "require" || cfg["connSecret"] != "pw" {
+		t.Fatalf("dial fields not injected: %v", cfg)
+	}
+	if cfg["connPort"].(float64) != 6000 {
+		t.Fatalf("connPort = %v, want 6000", cfg["connPort"])
+	}
+	// non-db.query node untouched
+	if string(out.Nodes[1].Config) != `{"left":"rowCount"}` {
+		t.Fatalf("non-db.query node was modified: %s", out.Nodes[1].Config)
+	}
+}
+
+func TestResolveConnections_UnknownConnection(t *testing.T) {
+	fake := seedFake()
+	fake.conns = nil
+	h := &handlers{store: fake}
+	def := flowspec.FlowDef{Nodes: []flowspec.NodeDef{
+		{ID: "q1", Type: "db.query", Config: mustRaw(`{"connectionId":"gone","sql":"SELECT 1"}`)},
+	}}
+	if _, err := h.resolveConnections(context.Background(), def); err == nil {
+		t.Fatal("expected error for a db.query node referencing an unknown connection")
+	}
+}
+
+func TestResolveConnections_NoConnectionId_NoOp(t *testing.T) {
+	h := &handlers{store: seedFake()}
+	def := flowspec.FlowDef{Nodes: []flowspec.NodeDef{
+		{ID: "q1", Type: "db.query", Config: mustRaw(`{"sql":"SELECT 1"}`)}, // demo path, no connectionId
+	}}
+	out, err := h.resolveConnections(context.Background(), def)
+	if err != nil {
+		t.Fatalf("no-op resolveConnections: %v", err)
+	}
+	if string(out.Nodes[0].Config) != `{"sql":"SELECT 1"}` {
+		t.Fatalf("config changed: %s", out.Nodes[0].Config)
+	}
+}
+
+func mustRaw(s string) json.RawMessage { return json.RawMessage(s) }

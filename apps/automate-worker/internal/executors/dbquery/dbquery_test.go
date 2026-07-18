@@ -265,3 +265,73 @@ func TestToItems_RaggedRowShorterThanColumns(t *testing.T) {
 		t.Error("short row should not populate missing column b")
 	}
 }
+
+// --- E6-S1: per-connection external dialing ---
+
+func TestExecute_ExternalConnection_OpensAndQueriesTarget(t *testing.T) {
+	def := &fakeQuerier{} // default pool: must NOT be used
+	ext := &fakeQuerier{rs: RowSet{Columns: []string{"n"}, Rows: [][]any{{1}}}}
+	res := &fakeResolver{val: "s3cr3t"}
+	var gotDSN string
+	deps := Deps{
+		Secrets: res, Querier: def, Masking: maskEngine(t), MaskPoint: masking.PointPreview,
+		OpenQuerier: func(_ context.Context, dsn string) (Querier, error) { gotDSN = dsn; return ext, nil },
+	}
+	in := Input{
+		SQL: "SELECT n FROM t", ConnSecret: "pw",
+		ConnHost: "ext-db", ConnPort: 6000, ConnDatabase: "hr", ConnUsername: "reader", ConnSSLMode: "require",
+	}
+	out, err := Execute(context.Background(), in, deps)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if want := "postgres://reader:s3cr3t@ext-db:6000/hr?sslmode=require"; gotDSN != want {
+		t.Fatalf("DSN = %q, want %q", gotDSN, want)
+	}
+	if !ext.called {
+		t.Fatal("external querier was not used")
+	}
+	if def.called {
+		t.Fatal("default querier must not be used when dialing external")
+	}
+	if out.Meta.RowCount != 1 {
+		t.Fatalf("rowCount = %d, want 1", out.Meta.RowCount)
+	}
+}
+
+func TestExecute_ExternalConnection_ResolveSecretError(t *testing.T) {
+	deps := Deps{
+		Secrets: &fakeResolver{err: errSentinel}, Querier: &fakeQuerier{}, Masking: maskEngine(t), MaskPoint: masking.PointPreview,
+		OpenQuerier: func(_ context.Context, _ string) (Querier, error) { return &fakeQuerier{}, nil },
+	}
+	_, err := Execute(context.Background(), Input{SQL: "SELECT 1", ConnSecret: "pw", ConnHost: "h", ConnDatabase: "d", ConnUsername: "u"}, deps)
+	if err == nil {
+		t.Fatal("expected error when the connection secret cannot be resolved")
+	}
+}
+
+func TestExecute_ExternalConnection_OpenError(t *testing.T) {
+	deps := Deps{
+		Secrets: &fakeResolver{val: "pw"}, Querier: &fakeQuerier{}, Masking: maskEngine(t), MaskPoint: masking.PointPreview,
+		OpenQuerier: func(_ context.Context, _ string) (Querier, error) { return nil, errSentinel },
+	}
+	_, err := Execute(context.Background(), Input{SQL: "SELECT 1", ConnHost: "h", ConnDatabase: "d", ConnUsername: "u"}, deps)
+	if err == nil {
+		t.Fatal("expected error when the external pool cannot be opened")
+	}
+}
+
+func TestExecute_NoQuerierAvailable(t *testing.T) {
+	// Not external and no default Querier => fail (never silently succeed).
+	deps := Deps{Secrets: &fakeResolver{}, Masking: maskEngine(t), MaskPoint: masking.PointPreview}
+	_, err := Execute(context.Background(), Input{SQL: "SELECT 1"}, deps)
+	if err == nil {
+		t.Fatal("expected error when no querier is available")
+	}
+}
+
+var errSentinel = errorString("boom")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }

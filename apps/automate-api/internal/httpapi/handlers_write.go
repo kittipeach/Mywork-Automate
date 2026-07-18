@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -87,7 +89,56 @@ func (h *handlers) loadRunnable(c *gin.Context, id string) (flowspec.FlowDef, st
 		h.writeStoreError(c, err)
 		return flowspec.FlowDef{}, store.FlowSummary{}, false
 	}
+
+	// Resolve each db.query node's connectionId to its stored dial fields so the
+	// worker dials the right external database (E6-S1). A referenced-but-missing
+	// connection is a 400 (the flow can't run as designed).
+	def, err = h.resolveConnections(ctx, def)
+	if err != nil {
+		errorEnvelope(c, http.StatusBadRequest, "bad_request", err.Error())
+		return flowspec.FlowDef{}, store.FlowSummary{}, false
+	}
 	return def, flow, true
+}
+
+// resolveConnections injects the stored connection's dial fields (host/port/
+// database/username/sslMode + the password's secretRef) into every db.query
+// node that names a connectionId. The password itself is never inlined — only
+// its secret name — so it is resolved in the worker at query time. Nodes without
+// a connectionId are left untouched (they use the worker's default pool).
+func (h *handlers) resolveConnections(ctx context.Context, def flowspec.FlowDef) (flowspec.FlowDef, error) {
+	for i, n := range def.Nodes {
+		if n.Type != "db.query" || len(n.Config) == 0 {
+			continue
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal(n.Config, &cfg); err != nil {
+			continue // malformed config is caught later by the executor
+		}
+		connID, _ := cfg["connectionId"].(string)
+		if connID == "" {
+			continue
+		}
+		conn, err := h.store.GetConnection(ctx, connID)
+		if err != nil {
+			if store.IsNotFound(err) {
+				return def, fmt.Errorf("db.query node %q references unknown connection %q", n.ID, connID)
+			}
+			return def, fmt.Errorf("resolve connection %q: %w", connID, err)
+		}
+		cfg["connHost"] = conn.Host
+		cfg["connPort"] = conn.Port
+		cfg["connDatabase"] = conn.Database
+		cfg["connUsername"] = conn.Username
+		cfg["connSslMode"] = conn.SSLMode
+		cfg["connSecret"] = conn.SecretRef
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return def, fmt.Errorf("re-marshal node %q config: %w", n.ID, err)
+		}
+		def.Nodes[i].Config = raw
+	}
+	return def, nil
 }
 
 // startRun records a "running" execution, hands the run to the Runner and wires
