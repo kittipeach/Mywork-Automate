@@ -85,11 +85,11 @@ export const NODE_TYPES: NodeType[] = [
       type: 'object',
       properties: {
         connectionId: { type: 'string', title: 'Connection', description: 'Postgres connection (RBAC-filtered).' },
-        mode: { type: 'string', title: 'Query mode', enum: ['builder', 'sql'], enumLabels: ['Visual builder', 'SQL'], default: 'sql' },
-        sql: { type: 'string', title: 'SQL (SELECT only)', format: 'sql', description: 'Validated server-side: single-statement SELECT only.' },
         maxRows: { type: 'number', title: 'Max rows', minimum: 1, maximum: 100000, default: 1000 },
+        // The query is built with the visual QueryBuilder (a structured,
+        // server-compiled spec — no free-form SQL field).
       },
-      required: ['connectionId', 'mode'],
+      required: ['connectionId'],
     },
   },
   {

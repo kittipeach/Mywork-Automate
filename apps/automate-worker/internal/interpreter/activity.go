@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -15,6 +16,7 @@ import (
 	"github.com/mywork/automate/pkg/filegen"
 	"github.com/mywork/automate/pkg/filestore"
 	"github.com/mywork/automate/pkg/mailer"
+	"github.com/mywork/automate/pkg/sqlbuilder"
 	"github.com/mywork/automate/pkg/templaterender"
 )
 
@@ -64,6 +66,11 @@ type Activities struct {
 	fileStore filestore.FileStore
 	mailer    mailer.Sender
 	mft       MFTClient
+	// allowRawSQL permits a db.query node to carry hand-written SQL. It is FALSE
+	// by default: the UI submits a structured builder spec that the server
+	// compiles (pkg/sqlbuilder), so no free-form SQL reaches a top-secret
+	// database. A dev/demo build may opt in via WithAllowRawSQL(true).
+	allowRawSQL bool
 }
 
 // Option configures optional Activities collaborators (functional options keep
@@ -85,6 +92,12 @@ func WithMFT(c MFTClient) Option {
 	return func(a *Activities) { a.mft = c }
 }
 
+// WithAllowRawSQL opts a db.query node into accepting hand-written SQL (dev/demo
+// only). Production leaves it off so only the visual builder can drive a query.
+func WithAllowRawSQL(allow bool) Option {
+	return func(a *Activities) { a.allowRawSQL = allow }
+}
+
 // NewActivities builds the activity struct around a wired dbquery.Deps, plus any
 // optional file/delivery collaborators supplied via options. The existing
 // single-argument call site (NewActivities(deps)) remains valid.
@@ -100,9 +113,11 @@ func NewActivities(deps dbquery.Deps, opts ...Option) *Activities {
 // injected at run start by the API (resolving the node's connectionId to its
 // stored connection); the executor uses them to dial the external database.
 type dbQueryConfig struct {
-	SQL        string `json:"sql"`
-	ConnSecret string `json:"connSecret"`
-	MaxRows    int    `json:"maxRows"`
+	Mode       string           `json:"mode"` // "builder" (default policy) | "sql"
+	Builder    *sqlbuilder.Spec `json:"builder"`
+	SQL        string           `json:"sql"`
+	ConnSecret string           `json:"connSecret"`
+	MaxRows    int              `json:"maxRows"`
 
 	ConnHost     string `json:"connHost"`
 	ConnPort     int    `json:"connPort"`
@@ -172,8 +187,11 @@ func (a *Activities) ExecuteNode(ctx context.Context, r NodeExecRequest) (NodeEx
 		return a.execDeliveryDownload(ctx, r)
 	case "delivery.mft":
 		return a.execDeliveryMFT(ctx, r)
-	case "trigger.manual", "noop":
-		// Pass incoming items through with no side effects.
+	case "trigger.manual", "trigger.schedule", "noop":
+		// Trigger/no-op nodes are graph entry points that define WHEN a flow runs,
+		// not a runtime step — they pass incoming items through with no side
+		// effects. trigger.schedule must be here too, or a scheduled (or manually
+		// re-run) flow would fail at its own entry node.
 		return NodeExecResult{Items: r.InItems}, nil
 	default:
 		return NodeExecResult{}, fmt.Errorf("interpreter: unknown node type %q", r.Type)
@@ -187,8 +205,17 @@ func (a *Activities) execDBQuery(ctx context.Context, r NodeExecRequest) (NodeEx
 	if err := json.Unmarshal(r.Config, &cfg); err != nil {
 		return NodeExecResult{}, fmt.Errorf("interpreter: db.query bad config: %w", err)
 	}
+	// Resolve the SQL. The default policy is builder-only: the UI submits a
+	// structured spec which the server compiles here (with resource guards) — no
+	// free-form SQL. Hand-written SQL is honoured only when explicitly allowed
+	// (dev/demo). Either way the executor re-validates it through pkg/sqlguard.
+	sql, params, err := a.resolveQuerySQL(cfg)
+	if err != nil {
+		return NodeExecResult{}, fmt.Errorf("interpreter: db.query node %q: %w", r.NodeID, err)
+	}
 	out, err := dbquery.Execute(ctx, dbquery.Input{
-		SQL:          cfg.SQL,
+		SQL:          sql,
+		Params:       params,
 		MaxRows:      cfg.MaxRows,
 		ViewerRoles:  r.ViewerRoles,
 		ConnSecret:   cfg.ConnSecret,
@@ -209,6 +236,26 @@ func (a *Activities) execDBQuery(ctx context.Context, r NodeExecRequest) (NodeEx
 			"columns":   out.Meta.Columns,
 		},
 	}, nil
+}
+
+// errRawSQLDisabled is returned when a node carries hand-written SQL but the
+// worker is not configured to allow it (the default).
+var errRawSQLDisabled = errors.New("free-form SQL is disabled; use the visual query builder")
+
+// resolveQuerySQL turns a db.query config into the SQL + bound params to run.
+// Builder specs are compiled server-side with resource guards (the default
+// policy); raw SQL is only honoured when explicitly allowed.
+func (a *Activities) resolveQuerySQL(cfg dbQueryConfig) (string, []any, error) {
+	if cfg.Builder != nil {
+		return sqlbuilder.Build(*cfg.Builder, cfg.MaxRows)
+	}
+	if cfg.Mode == "sql" || cfg.SQL != "" {
+		if !a.allowRawSQL {
+			return "", nil, errRawSQLDisabled
+		}
+		return cfg.SQL, nil, nil
+	}
+	return "", nil, fmt.Errorf("db.query has no query — provide a visual builder spec")
 }
 
 // execIf evaluates the simple condition and sets Decision to "true"/"false".

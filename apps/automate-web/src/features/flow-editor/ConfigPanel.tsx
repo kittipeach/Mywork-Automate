@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/Button';
 import { StatusBadge } from '@/components/ui/Badge';
 import { cn } from '@/lib/cn';
 import { SchemaForm } from '@/features/node-config';
-import { QueryPanel } from '@/features/connections/QueryPanel';
+import { QueryBuilder } from '@/features/connections/QueryBuilder';
+import { emptySpec, type QuerySpec } from '@/features/connections/queryBuilderSpec';
 import { nodeIcon } from './nodeIcons';
 import { upstreamNodeNames } from './graph';
 import { useFlowStore } from './store';
@@ -81,11 +82,11 @@ export function ConfigPanel() {
 
         {node.data.nodeType === 'db.query' && (
           <div className="mt-4 border-t border-border pt-4">
-            <QueryPanel
+            <QueryBuilder
               connectionId={(config?.connectionId as string) ?? ''}
-              sql={(config?.sql as string) ?? ''}
-              maxRows={(config?.maxRows as number) ?? 100}
-              onSqlChange={(sql) => setNodeConfig(selectedNodeId, { ...(config ?? {}), sql })}
+              spec={(config?.builder as QuerySpec) ?? emptySpec()}
+              maxRows={(config?.maxRows as number) ?? 1000}
+              onChange={(builder) => setNodeConfig(selectedNodeId, { ...(config ?? {}), mode: 'builder', builder })}
             />
           </div>
         )}
