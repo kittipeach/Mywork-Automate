@@ -23,10 +23,15 @@ describe('SchemaForm — render per type', () => {
   });
 
   it('renders an enum as a select using enumLabels', () => {
-    render(<SchemaForm schema={dbSchema} formId="db" />);
+    // Inline fixture (db.query no longer carries an enum — the query is built via
+    // the visual QueryBuilder). Exercises SchemaForm's enum→select rendering.
+    const enumSchema: JSONSchema = {
+      type: 'object',
+      properties: { mode: { type: 'string', title: 'Query mode', enum: ['builder', 'sql'], enumLabels: ['Visual builder', 'SQL'] } },
+    };
+    render(<SchemaForm schema={enumSchema} formId="db" />);
     const select = screen.getByLabelText(/Query mode/i) as HTMLSelectElement;
     expect(select.tagName).toBe('SELECT');
-    // enumLabels: 'Visual builder' / 'SQL'
     expect(screen.getByRole('option', { name: 'Visual builder' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'SQL' })).toBeInTheDocument();
   });
@@ -46,7 +51,13 @@ describe('SchemaForm — render per type', () => {
   });
 
   it('renders a sql format field as a monospace textarea with SQL affordance', () => {
-    render(<SchemaForm schema={dbSchema} formId="db" />);
+    // Inline fixture: no registry node carries a raw-SQL field anymore, but
+    // SchemaForm still supports format:'sql' — keep that path covered.
+    const sqlSchema: JSONSchema = {
+      type: 'object',
+      properties: { sql: { type: 'string', title: 'SQL (SELECT only)', format: 'sql' } },
+    };
+    render(<SchemaForm schema={sqlSchema} formId="db" />);
     const ta = screen.getByLabelText(/SQL \(SELECT only\)/i) as HTMLTextAreaElement;
     expect(ta.tagName).toBe('TEXTAREA');
     expect(ta.className).toContain('font-mono');

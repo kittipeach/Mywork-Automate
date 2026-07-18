@@ -108,11 +108,12 @@ var nodeTypes = []NodeType{
 			Type: "object",
 			Properties: props(map[string]JSONSchema{
 				"connectionId": {Type: "string", Title: "Connection", Description: "Postgres connection (RBAC-filtered)."},
-				"mode":         {Type: "string", Title: "Query mode", Enum: []string{"builder", "sql"}, EnumLabels: []string{"Visual builder", "SQL"}, Default: "sql"},
-				"sql":          {Type: "string", Title: "SQL (SELECT only)", Format: "sql", Description: "Validated server-side: single-statement SELECT only."},
 				"maxRows":      {Type: "number", Title: "Max rows", Minimum: fptr(1), Maximum: fptr(100000), Default: float64(1000)},
+				// The query itself is built with the visual QueryBuilder (a
+				// structured, server-compiled spec — no free-form SQL field). See
+				// pkg/sqlbuilder + the automate-web QueryBuilder component.
 			}),
-			Required: []string{"connectionId", "mode"},
+			Required: []string{"connectionId"},
 		},
 	},
 	{

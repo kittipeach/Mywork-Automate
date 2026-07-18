@@ -104,19 +104,27 @@ describe('buildZodSchema + validate — strings & required', () => {
 });
 
 describe('buildZodSchema + validate — enums', () => {
+  // Inline enum fixture — db.query no longer has an enum field (the query is built
+  // by the visual QueryBuilder); this keeps the enum-validation path covered.
+  const enumSchema: JSONSchema = {
+    type: 'object',
+    properties: { mode: { type: 'string', enum: ['builder', 'sql'] } },
+    required: ['mode'],
+  };
+
   it('rejects a value not in the enum', () => {
-    const r = validate(dbSchema, { connectionId: 'c', mode: 'nonsense' });
+    const r = validate(enumSchema, { mode: 'nonsense' });
     expect(r.valid).toBe(false);
     expect(r.errors.mode).toBeTruthy();
   });
 
   it('accepts a valid enum value', () => {
-    const r = validate(dbSchema, { connectionId: 'c', mode: 'builder' });
+    const r = validate(enumSchema, { mode: 'builder' });
     expect(r.valid).toBe(true);
   });
 
   it('fails a required enum left blank', () => {
-    const r = validate(dbSchema, { connectionId: 'c', mode: '' });
+    const r = validate(enumSchema, { mode: '' });
     expect(r.valid).toBe(false);
     expect(r.errors.mode).toBeTruthy();
   });
