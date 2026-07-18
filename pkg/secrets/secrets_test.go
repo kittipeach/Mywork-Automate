@@ -286,3 +286,69 @@ var (
 	_ Resolver = (*FileResolver)(nil)
 	_ Resolver = (*CachingResolver)(nil)
 )
+
+func TestFileResolver_Write_UpsertAndResolve(t *testing.T) {
+	path := writeTempFile(t, "existing: old\n")
+	r, err := NewFileResolver(path)
+	if err != nil {
+		t.Fatalf("NewFileResolver: %v", err)
+	}
+	// new secret
+	if err := r.Write(context.Background(), "hr-db-password", "s3cr3t"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got, err := r.Resolve(context.Background(), "hr-db-password"); err != nil || got != "s3cr3t" {
+		t.Fatalf("Resolve after write = %q, %v; want s3cr3t", got, err)
+	}
+	// overwrite existing
+	if err := r.Write(context.Background(), "existing", "new"); err != nil {
+		t.Fatalf("Write overwrite: %v", err)
+	}
+	if got, _ := r.Resolve(context.Background(), "existing"); got != "new" {
+		t.Fatalf("overwrite Resolve = %q, want new", got)
+	}
+	// persisted to disk: a fresh resolver over the same file sees both
+	r2, err := NewFileResolver(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got, _ := r2.Resolve(context.Background(), "hr-db-password"); got != "s3cr3t" {
+		t.Fatalf("persisted Resolve = %q, want s3cr3t", got)
+	}
+}
+
+func TestFileResolver_Write_EmptyName(t *testing.T) {
+	r, err := NewFileResolver(writeTempFile(t, "a: b\n"))
+	if err != nil {
+		t.Fatalf("NewFileResolver: %v", err)
+	}
+	if err := r.Write(context.Background(), "", "x"); err == nil {
+		t.Fatal("Write with empty name should error")
+	}
+}
+
+func TestFileResolver_Write_PersistFailureRollsBack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.local.yaml")
+	if err := os.WriteFile(path, []byte("a: b\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	r, err := NewFileResolver(path)
+	if err != nil {
+		t.Fatalf("NewFileResolver: %v", err)
+	}
+	// Make the file unwritable by replacing its parent dir with a read-only one:
+	// point the resolver at a path whose directory does not exist so WriteFile fails.
+	r.path = filepath.Join(dir, "nope", "secrets.local.yaml")
+	if err := r.Write(context.Background(), "k", "v"); err == nil {
+		t.Fatal("Write should fail when the file cannot be persisted")
+	}
+	// rolled back: the in-memory value must not linger
+	if _, err := r.Resolve(context.Background(), "k"); err == nil {
+		t.Fatal("failed Write must not leave the value resolvable (rollback)")
+	}
+}
+
+// FileResolver satisfies both interfaces.
+var _ Resolver = (*FileResolver)(nil)
+var _ Writer = (*FileResolver)(nil)

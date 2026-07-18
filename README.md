@@ -41,7 +41,10 @@ AUTH_LOCAL_ENABLED=true go run ./apps/automate-api/cmd/api
 curl -s localhost:8080/healthz
 ```
 
-`make help` lists every target.
+`make help` lists every target. To set the stack up on a **fresh/other machine**
+(prerequisites, infra, DB migration, smoke test, protected‑env notes) see
+[`docs/RUNNING.md`](docs/RUNNING.md). Standalone DB migration:
+`scripts/migrate.sh "<postgres-url>"`.
 
 ## Non-negotiables (see [`CLAUDE.md`](CLAUDE.md))
 

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 
 	"github.com/mywork/automate/pkg/masking"
 	"github.com/mywork/automate/pkg/secrets"
@@ -46,10 +47,14 @@ type Querier interface {
 
 // Deps are the collaborators the executor composes.
 type Deps struct {
-	Secrets        secrets.Resolver
-	Querier        Querier
-	Masking        *masking.Engine
-	MaskPoint      masking.Point
+	Secrets   secrets.Resolver
+	Querier   Querier
+	Masking   *masking.Engine
+	MaskPoint masking.Point
+	// OpenQuerier returns a Querier for an external connection's DSN (a per-DSN
+	// pooled connection, cached by the worker). When nil, or when the Input has
+	// no connection dial fields, the executor falls back to the default Querier.
+	OpenQuerier    func(ctx context.Context, dsn string) (Querier, error)
 	DefaultMaxRows int
 }
 
@@ -59,7 +64,35 @@ type Input struct {
 	Params      []any
 	MaxRows     int      // <=0 => Deps.DefaultMaxRows, else defaultMaxRows
 	ViewerRoles []string // roles of the user this result is being prepared for
-	ConnSecret  string   // keyvault_secret_name of the connection credential
+	ConnSecret  string   // secret name of the connection password (resolved via Secrets)
+
+	// Connection dial target (E6-S1). When Host/Database/Username are all set and
+	// Deps.OpenQuerier is provided, the query runs against THIS external database
+	// (password resolved from ConnSecret); otherwise it uses Deps.Querier.
+	ConnHost     string
+	ConnPort     int
+	ConnDatabase string
+	ConnUsername string
+	ConnSSLMode  string
+}
+
+// dialsExternal reports whether the input names a specific external database.
+func (in Input) dialsExternal() bool {
+	return in.ConnHost != "" && in.ConnDatabase != "" && in.ConnUsername != ""
+}
+
+// dsn builds the pgx connection string for the external target using password.
+func (in Input) dsn(password string) string {
+	port := in.ConnPort
+	if port == 0 {
+		port = 5432
+	}
+	ssl := in.ConnSSLMode
+	if ssl == "" {
+		ssl = "disable"
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		url.QueryEscape(in.ConnUsername), url.QueryEscape(password), in.ConnHost, port, in.ConnDatabase, ssl)
 }
 
 // Meta describes the shaped result.
@@ -88,14 +121,36 @@ func Execute(ctx context.Context, in Input, deps Deps) (Output, error) {
 	if deps.Masking == nil {
 		return Output{}, ErrMaskingRequired
 	}
-	// 2. Resolve the connection credential via the secret resolver only.
-	if in.ConnSecret != "" {
+	// 2. Resolve the connection credential and select the target Querier. When the
+	// input names an external database (E6-S1), resolve its password and open a
+	// per-connection pool against it; otherwise use the default Querier (the demo
+	// pool) after validating any provided credential still resolves.
+	querier := deps.Querier
+	switch {
+	case in.dialsExternal() && deps.OpenQuerier != nil:
+		password := ""
+		if in.ConnSecret != "" {
+			p, err := deps.Secrets.Resolve(ctx, in.ConnSecret)
+			if err != nil {
+				return Output{}, fmt.Errorf("dbquery: resolve credential: %w", err)
+			}
+			password = p
+		}
+		q, err := deps.OpenQuerier(ctx, in.dsn(password))
+		if err != nil {
+			return Output{}, fmt.Errorf("dbquery: open connection: %w", err)
+		}
+		querier = q
+	case in.ConnSecret != "":
 		if _, err := deps.Secrets.Resolve(ctx, in.ConnSecret); err != nil {
 			return Output{}, fmt.Errorf("dbquery: resolve credential: %w", err)
 		}
 	}
+	if querier == nil {
+		return Output{}, fmt.Errorf("dbquery: no querier available")
+	}
 	// 3. Execute the parameterized query.
-	rs, err := deps.Querier.Query(ctx, in.SQL, in.Params)
+	rs, err := querier.Query(ctx, in.SQL, in.Params)
 	if err != nil {
 		return Output{}, fmt.Errorf("dbquery: query failed: %w", err)
 	}

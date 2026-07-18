@@ -10,6 +10,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/url"
 
 	"github.com/mywork/automate/internal/flowspec"
 )
@@ -77,11 +79,22 @@ type Execution struct {
 
 // Connection matches the TS `Connection` shape. AllowedRoles is always non-nil
 // so it serialises as `[]` rather than `null`.
+//
+// Port/Database/Username/SSLMode/SecretRef describe how to dial an external
+// Postgres (E6-S1). The password itself is NEVER stored here — SecretRef is the
+// NAME of the secret (Key Vault in prod, secrets.local.yaml in dev) that holds
+// it, resolved through pkg/secrets at query time. That keeps credentials out of
+// the control-plane database (CLAUDE.md rule 4).
 type Connection struct {
 	ID           string   `json:"id"`
 	Name         string   `json:"name"`
 	Type         string   `json:"type"`
 	Host         string   `json:"host"`
+	Port         int      `json:"port,omitempty"`
+	Database     string   `json:"database,omitempty"`
+	Username     string   `json:"username,omitempty"`
+	SSLMode      string   `json:"sslMode,omitempty"`
+	SecretRef    string   `json:"secretRef,omitempty"`
 	Status       string   `json:"status"`
 	AllowedRoles []string `json:"allowedRoles"`
 }
@@ -125,11 +138,42 @@ func IsNotFound(err error) bool {
 
 // ConnectionInput carries the mutable fields when creating or updating a
 // connection. AllowedRoles may be nil (treated as empty/public).
+//
+// Password is a WRITE-ONLY convenience for dev: when set, the API saves it into
+// the secret store and records the generated SecretRef — it is never persisted
+// on the connection row. In prod, callers set SecretRef directly (an existing
+// Key Vault secret name) and leave Password empty.
 type ConnectionInput struct {
 	Name         string   `json:"name"`
 	Type         string   `json:"type"`
 	Host         string   `json:"host"`
+	Port         int      `json:"port,omitempty"`
+	Database     string   `json:"database,omitempty"`
+	Username     string   `json:"username,omitempty"`
+	SSLMode      string   `json:"sslMode,omitempty"`
+	SecretRef    string   `json:"secretRef,omitempty"`
+	Password     string   `json:"password,omitempty"`
 	AllowedRoles []string `json:"allowedRoles"`
+}
+
+// DSN builds a libpq/pgx connection string for a Postgres connection using the
+// resolved password. It returns "" for a non-postgres type or when the required
+// fields are missing, so callers can fall back to the default pool. SSLMode
+// defaults to "disable" when unset (dev); set it explicitly for prod.
+func (c Connection) DSN(password string) string {
+	if c.Type != "postgres" || c.Host == "" || c.Database == "" || c.Username == "" {
+		return ""
+	}
+	port := c.Port
+	if port == 0 {
+		port = 5432
+	}
+	ssl := c.SSLMode
+	if ssl == "" {
+		ssl = "disable"
+	}
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		url.QueryEscape(c.Username), url.QueryEscape(password), c.Host, port, c.Database, ssl)
 }
 
 // Version is one immutable published-version snapshot's metadata (docs/spec/08
@@ -234,6 +278,11 @@ type Store interface {
 	// when the (flow, versionNo) pair is unknown.
 	GetVersionDefinition(ctx context.Context, flowID string, versionNo int) (flowspec.FlowDef, error)
 
+	// GetConnection returns one connection by id (including its dial fields, but
+	// never the password). ErrNotFound when the id is unknown. Used by the
+	// test-connection endpoint and by run start to resolve a db.query node's
+	// target database.
+	GetConnection(ctx context.Context, id string) (Connection, error)
 	// CreateConnection inserts a new connection and returns it.
 	CreateConnection(ctx context.Context, in ConnectionInput) (Connection, error)
 	// UpdateConnection replaces a connection's mutable fields.

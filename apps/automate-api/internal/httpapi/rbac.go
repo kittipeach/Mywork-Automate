@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -14,6 +15,18 @@ import (
 // ctxRoleKey is the gin.Context key under which resolveRole stores the caller's
 // effective role (an authz.Role).
 const ctxRoleKey = "authz.role"
+
+// authTokenCookie is the cookie an SSO/login flow sets with the caller's JWT.
+// resolveRole reads the token from the Authorization header first, then this
+// cookie, so a browser session authenticated via SSO (which stores the token in
+// an HttpOnly cookie rather than a JS-managed header) is authenticated on every
+// request. The value is validated exactly like a bearer token — a forged cookie
+// simply fails verification and falls through to the header/default path.
+const authTokenCookie = "mw_access_token"
+
+// authCookieTTL bounds the login cookie's lifetime; it matches the local JWT's
+// validity so the cookie and the token expire together.
+const authCookieTTL = 8 * time.Hour
 
 // authDeps bundles the auth collaborators the router needs: the login/verify
 // service, a logger for structured auth events and the append-only audit trail.
@@ -69,7 +82,7 @@ func resolveRole(deps authDeps) gin.HandlerFunc {
 // default role is always resolved (ok=true) so local flows keep working.
 func roleFromContext(deps authDeps, c *gin.Context) (authz.Role, bool) {
 	if deps.service != nil {
-		if tok := bearerToken(c); tok != "" {
+		if tok := requestToken(c); tok != "" {
 			if claims, err := deps.service.Verify(tok); err == nil {
 				candidates := make([]authz.Role, 0, len(claims.Roles))
 				for _, r := range claims.Roles {
@@ -101,6 +114,18 @@ func roleFromContext(deps authDeps, c *gin.Context) (authz.Role, bool) {
 		return "", false
 	}
 	return authz.Role(defaultRole), true
+}
+
+// requestToken returns the caller's JWT from the Authorization header, or — when
+// that is absent — from the SSO auth cookie. "" when neither is present.
+func requestToken(c *gin.Context) string {
+	if t := bearerToken(c); t != "" {
+		return t
+	}
+	if ck, err := c.Cookie(authTokenCookie); err == nil {
+		return strings.TrimSpace(ck)
+	}
+	return ""
 }
 
 // bearerToken extracts the token from an `Authorization: Bearer <token>` header,

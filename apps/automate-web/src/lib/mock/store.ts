@@ -41,6 +41,13 @@ export type Connection = {
   name: string;
   type: 'postgres' | 'sftp' | 'smtp' | 'graph';
   host: string;
+  // Postgres dial fields (E6-S1). The password is never on this shape — only
+  // secretRef, the NAME of the secret that holds it.
+  port?: number;
+  database?: string;
+  username?: string;
+  sslMode?: string;
+  secretRef?: string;
   status: 'ok' | 'untested' | 'error';
   allowedRoles: string[];
 };

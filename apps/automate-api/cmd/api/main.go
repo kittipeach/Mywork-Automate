@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	temporalclient "go.temporal.io/sdk/client"
 
@@ -29,7 +30,23 @@ import (
 	"github.com/mywork/automate/pkg/logscrub"
 	mailersmtp "github.com/mywork/automate/pkg/mailer/smtp"
 	"github.com/mywork/automate/pkg/obs"
+	"github.com/mywork/automate/pkg/secrets"
 )
+
+// pgxDialer implements httpapi.ConnDialer: it opens a short-lived connection to a
+// DSN and pings it, so the test-connection endpoint reports real reachability.
+type pgxDialer struct{}
+
+func (pgxDialer) Ping(ctx context.Context, dsn string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	return conn.Ping(ctx)
+}
 
 // SMTP defaults for run-failure notifications (E5-S6). These mirror the worker's
 // delivery.email defaults so both connect to the same dev mailhog by default.
@@ -178,9 +195,24 @@ func main() {
 	sender := mailersmtp.New(getenv("SMTP_ADDR", defaultSMTPAddr), getenv("SMTP_FROM", defaultSMTPFrom))
 	notifier := notify.New(sender)
 
+	// External-connection secret store (E6-S1). In dev the file resolver both
+	// resolves and saves connection passwords (secrets.local.yaml); in prod this
+	// is Key Vault (resolve-only — passwords are provisioned out of band). A
+	// missing file is non-fatal: connections can still be created with a
+	// pre-provisioned secretRef, but the admin "save password" convenience and
+	// the test-connection probe degrade gracefully.
+	var connWriter secrets.Writer
+	var connResolver secrets.Resolver
+	if fr, ferr := secrets.NewFileResolver(getenv("SECRETS_FILE", "secrets.local.yaml")); ferr != nil {
+		logger.Warn("secret store unavailable; connection password save/test disabled", "err", ferr)
+	} else {
+		connWriter, connResolver = fr, fr
+	}
+	connOpt := httpapi.WithConnDeps(connWriter, connResolver, pgxDialer{})
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg, querier, notifier),
+		Handler:           httpapi.NewRouter(cfg, st, run, auditSvc, sched, authCfg, querier, notifier, connOpt),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

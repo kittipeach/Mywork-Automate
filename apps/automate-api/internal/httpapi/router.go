@@ -51,7 +51,7 @@ type AuthConfig struct {
 // pgx pool; nil disables those endpoints (they then 503). notifier alerts a
 // flow's configured recipients when a run finishes "failed" (E5-S6); nil falls
 // back to notify.Noop (no email — SMTP not configured).
-func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig, querier preview.Querier, notifier notify.Notifier) *gin.Engine {
+func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc audit.Service, sched scheduler.Scheduler, authCfg AuthConfig, querier preview.Querier, notifier notify.Notifier, opts ...RouterOption) *gin.Engine {
 	if auditSvc == nil {
 		auditSvc = audit.NewNoop()
 	}
@@ -82,6 +82,9 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	})
 
 	h := &handlers{store: st, runner: run, audit: auditSvc, sched: sched, log: authCfg.Logger, querier: querier, mask: maskEng, notifier: notifier}
+	for _, opt := range opts {
+		opt(h)
+	}
 
 	deps := authDeps{service: authCfg.Service, audit: auditSvc, protected: cfg.IsProtectedEnv()}
 	if authCfg.Logger != nil {
@@ -106,6 +109,9 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 	if authCfg.Service != nil {
 		v1.POST("/auth/local/login", ah.localLogin)
 	}
+	// Logout clears the SSO auth cookie; always available (no role, no service
+	// dependency) so a browser session can be ended regardless of auth mode.
+	v1.POST("/auth/logout", ah.logout)
 
 	// Everything below resolves the caller's role (JWT → X-Role → defaultRole)
 	// and is then guarded per route by RequirePermission (deny-by-default).

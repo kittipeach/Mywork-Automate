@@ -96,11 +96,19 @@ func NewActivities(deps dbquery.Deps, opts ...Option) *Activities {
 	return a
 }
 
-// dbQueryConfig is the db.query node config shape.
+// dbQueryConfig is the db.query node config shape. The Conn* dial fields are
+// injected at run start by the API (resolving the node's connectionId to its
+// stored connection); the executor uses them to dial the external database.
 type dbQueryConfig struct {
 	SQL        string `json:"sql"`
 	ConnSecret string `json:"connSecret"`
 	MaxRows    int    `json:"maxRows"`
+
+	ConnHost     string `json:"connHost"`
+	ConnPort     int    `json:"connPort"`
+	ConnDatabase string `json:"connDatabase"`
+	ConnUsername string `json:"connUsername"`
+	ConnSSLMode  string `json:"connSslMode"`
 }
 
 // ifConfig is the logic.if node config: a simple {left op right} comparison.
@@ -180,10 +188,15 @@ func (a *Activities) execDBQuery(ctx context.Context, r NodeExecRequest) (NodeEx
 		return NodeExecResult{}, fmt.Errorf("interpreter: db.query bad config: %w", err)
 	}
 	out, err := dbquery.Execute(ctx, dbquery.Input{
-		SQL:         cfg.SQL,
-		MaxRows:     cfg.MaxRows,
-		ViewerRoles: r.ViewerRoles,
-		ConnSecret:  cfg.ConnSecret,
+		SQL:          cfg.SQL,
+		MaxRows:      cfg.MaxRows,
+		ViewerRoles:  r.ViewerRoles,
+		ConnSecret:   cfg.ConnSecret,
+		ConnHost:     cfg.ConnHost,
+		ConnPort:     cfg.ConnPort,
+		ConnDatabase: cfg.ConnDatabase,
+		ConnUsername: cfg.ConnUsername,
+		ConnSSLMode:  cfg.ConnSSLMode,
 	}, a.deps)
 	if err != nil {
 		return NodeExecResult{}, fmt.Errorf("interpreter: db.query node %q: %w", r.NodeID, err)

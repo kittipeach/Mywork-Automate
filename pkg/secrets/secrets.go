@@ -45,10 +45,21 @@ type Resolver interface {
 	Resolve(ctx context.Context, name string) (string, error)
 }
 
-// FileResolver resolves secrets from a flat "name: value" YAML map loaded once
-// at construction. It is intended only for dev/local use; the file
-// (secrets.local.yaml) is gitignored and never committed.
+// Writer persists a named secret. In prod this is Key Vault (a privileged,
+// audited path); in dev FileResolver implements it against secrets.local.yaml so
+// the admin UI can save an external-DB password without a Key Vault. Storing a
+// secret via Writer is the ONLY sanctioned way credentials enter the system —
+// they must never be written to the control-plane database.
+type Writer interface {
+	Write(ctx context.Context, name, value string) error
+}
+
+// FileResolver resolves (and, in dev, writes) secrets from a flat "name: value"
+// YAML map. It is intended only for dev/local use; the file (secrets.local.yaml)
+// is gitignored and never committed. Safe for concurrent Resolve/Write.
 type FileResolver struct {
+	mu     sync.RWMutex
+	path   string
 	values map[string]string
 }
 
@@ -66,16 +77,38 @@ func NewFileResolver(path string) (*FileResolver, error) {
 		// secret value keyed by this package, but we still avoid echoing content.
 		return nil, fmt.Errorf("secrets: parse file %q: %w", path, err)
 	}
-	return &FileResolver{values: values}, nil
+	return &FileResolver{path: path, values: values}, nil
 }
 
 // Resolve returns the value for name, or ErrNotFound if the name is absent.
 func (r *FileResolver) Resolve(_ context.Context, name string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	v, ok := r.values[name]
 	if !ok {
 		return "", fmt.Errorf("secrets: %q: %w", name, ErrNotFound)
 	}
 	return v, nil
+}
+
+// Write upserts name=value in memory and persists the whole map back to the YAML
+// file (0600). A subsequent Resolve on this resolver sees it immediately.
+func (r *FileResolver) Write(_ context.Context, name, value string) error {
+	if name == "" {
+		return fmt.Errorf("secrets: write: empty name")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.values[name] = value
+	data, err := yaml.Marshal(r.values)
+	if err != nil {
+		return fmt.Errorf("secrets: marshal for write: %w", err)
+	}
+	if err := os.WriteFile(r.path, data, 0o600); err != nil {
+		delete(r.values, name) // roll back the in-memory change on persist failure
+		return fmt.Errorf("secrets: write file %q: %w", r.path, err)
+	}
+	return nil
 }
 
 // cacheEntry is a resolved value together with the instant it expires.

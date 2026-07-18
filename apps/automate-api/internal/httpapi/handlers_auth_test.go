@@ -287,3 +287,77 @@ func TestMe_UnknownRole_EmptyPermissions(t *testing.T) {
 		t.Errorf("permissions = %v, want empty", perms)
 	}
 }
+
+// --- SSO auth cookie (token from cookie) ---
+
+func TestLogin_SetsAuthCookie_AndCookieAuthenticates(t *testing.T) {
+	r, _ := loginRouter(t)
+	w, body := postJSON(t, r, "/api/automate/v1/auth/local/login",
+		`{"email":"`+auth.DevAdminEmail+`","password":"`+auth.DevAdminPassword+`"}`, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login = %d, want 200", w.Code)
+	}
+	var tok string
+	for _, ck := range w.Result().Cookies() {
+		if ck.Name == authTokenCookie {
+			tok = ck.Value
+			if !ck.HttpOnly {
+				t.Error("auth cookie must be HttpOnly")
+			}
+		}
+	}
+	if tok == "" {
+		t.Fatal("login did not set the auth cookie")
+	}
+	if tok != body["token"] {
+		t.Error("cookie token differs from the body token")
+	}
+
+	// Authenticate a subsequent request using ONLY the cookie (no Authorization).
+	req := httptest.NewRequest(http.MethodGet, "/api/automate/v1/me", nil)
+	req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: tok})
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req)
+	var me map[string]any
+	_ = json.Unmarshal(w2.Body.Bytes(), &me)
+	if me["role"] != "admin" {
+		t.Fatalf("cookie-authenticated role = %v, want admin", me["role"])
+	}
+}
+
+func TestLogout_ClearsAuthCookie(t *testing.T) {
+	r, _ := loginRouter(t)
+	w, _ := postJSON(t, r, "/api/automate/v1/auth/logout", ``, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("logout = %d, want 200", w.Code)
+	}
+	var cleared bool
+	for _, ck := range w.Result().Cookies() {
+		if ck.Name == authTokenCookie {
+			cleared = true
+			if ck.MaxAge >= 0 {
+				t.Errorf("logout should expire the cookie, MaxAge = %d", ck.MaxAge)
+			}
+		}
+	}
+	if !cleared {
+		t.Fatal("logout did not clear the auth cookie")
+	}
+}
+
+func TestCookieAuth_ForgedTokenDoesNotAuthenticate(t *testing.T) {
+	r, _ := loginRouter(t)
+	// A garbage cookie fails verification and falls through to the dev default
+	// (admin) — it never grants a role from the forged token itself. We assert it
+	// does not error/crash and the endpoint still responds.
+	req := httptest.NewRequest(http.MethodGet, "/api/automate/v1/me", nil)
+	req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: "not.a.jwt"})
+	req.Header.Set("X-Role", "viewer") // explicit downgrade still wins over the bad cookie
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	var me map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &me)
+	if me["role"] != "viewer" {
+		t.Fatalf("forged cookie + X-Role viewer = %v, want viewer", me["role"])
+	}
+}

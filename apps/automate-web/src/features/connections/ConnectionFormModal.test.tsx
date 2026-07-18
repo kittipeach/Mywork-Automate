@@ -9,13 +9,20 @@ const updateMutate = vi.fn();
 const deleteMutate = vi.fn();
 const testMutate = vi.fn();
 const testReset = vi.fn();
+let testData: { status: string; message?: string } | undefined;
 
 vi.mock('@/api/connections', () => ({
   useCreateConnection: () => ({ mutate: createMutate, isPending: false }),
   useUpdateConnection: () => ({ mutate: updateMutate, isPending: false }),
   useDeleteConnection: () => ({ mutate: deleteMutate, isPending: false }),
-  useTestConnection: () => ({ mutate: testMutate, isPending: false, reset: testReset }),
+  useTestConnection: () => ({ mutate: testMutate, isPending: false, reset: testReset, data: testData }),
 }));
+
+/** Fill the Postgres-only dial fields so the form validates. */
+function fillPostgres(scope = screen) {
+  fireEvent.change(scope.getByLabelText('Database'), { target: { value: 'hr' } });
+  fireEvent.change(scope.getByLabelText('Username'), { target: { value: 'reader' } });
+}
 
 const toastFn = vi.fn();
 vi.mock('@/components/ui/Toast', () => ({
@@ -27,6 +34,10 @@ const conn: Connection = {
   name: 'HR DB',
   type: 'postgres',
   host: 'hr-db:5432',
+  database: 'hr',
+  username: 'reader',
+  port: 5432,
+  sslMode: 'disable',
   status: 'ok',
   allowedRoles: ['admin'],
 };
@@ -39,6 +50,7 @@ beforeEach(() => {
   testMutate.mockReset();
   testReset.mockReset();
   toastFn.mockReset();
+  testData = undefined;
 });
 
 describe('ConnectionFormModal — create mode', () => {
@@ -74,7 +86,9 @@ describe('ConnectionFormModal — create mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create/ }));
 
     await waitFor(() => expect(createMutate).toHaveBeenCalled());
-    expect(createMutate.mock.calls[0][0]).toEqual({
+    // sftp has no DB dial fields; assert the meaningful fields (the form also
+    // carries defaulted postgres fields, which the backend ignores for sftp).
+    expect(createMutate.mock.calls[0][0]).toMatchObject({
       name: 'New SFTP',
       type: 'sftp',
       host: 'sftp:22',
@@ -84,11 +98,29 @@ describe('ConnectionFormModal — create mode', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('submits the Postgres dial fields + password', async () => {
+    createMutate.mockImplementation((_v, opts) => opts?.onSuccess?.());
+    render(<ConnectionFormModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'HR' } });
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'hr-db' } });
+    fireEvent.change(screen.getByLabelText('Port'), { target: { value: '6000' } });
+    fillPostgres();
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'p@ss' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+
+    await waitFor(() => expect(createMutate).toHaveBeenCalled());
+    expect(createMutate.mock.calls[0][0]).toMatchObject({
+      name: 'HR', type: 'postgres', host: 'hr-db', port: 6000,
+      database: 'hr', username: 'reader', password: 'p@ss',
+    });
+  });
+
   it('toasts an error when create fails', async () => {
     createMutate.mockImplementation((_v, opts) => opts?.onError?.());
     render(<ConnectionFormModal open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'X' } });
     fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'h' } });
+    fillPostgres();
     fireEvent.click(screen.getByRole('button', { name: /Create/ }));
     await waitFor(() => expect(toastFn).toHaveBeenCalledWith('error', 'Could not create connection'));
   });
@@ -98,6 +130,7 @@ describe('ConnectionFormModal — create mode', () => {
     render(<ConnectionFormModal open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'X' } });
     fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'h' } });
+    fillPostgres();
 
     const group = screen.getByRole('group', { name: /Allowed roles/i });
     fireEvent.click(within(group).getByText('designer')); // add
@@ -140,15 +173,25 @@ describe('ConnectionFormModal — edit mode', () => {
   });
 
   it('tests the connection and toasts ok/fail', async () => {
-    testMutate.mockImplementationOnce((_id, opts) => opts?.onSuccess?.());
+    // success result → toast success
+    testMutate.mockImplementationOnce((_id, opts) => opts?.onSuccess?.({ status: 'ok' }));
     render(<ConnectionFormModal open onClose={() => {}} connection={conn} />);
     fireEvent.click(screen.getByRole('button', { name: /Test/ }));
     expect(testMutate).toHaveBeenCalledWith('conn_1', expect.anything());
     await waitFor(() => expect(toastFn).toHaveBeenCalledWith('success', 'Connection OK'));
 
-    testMutate.mockImplementationOnce((_id, opts) => opts?.onError?.());
+    // reachable server, unreachable target → status:"error" with a message → toast error
+    testMutate.mockImplementationOnce((_id, opts) =>
+      opts?.onSuccess?.({ status: 'error', message: 'could not connect: refused' }));
     fireEvent.click(screen.getByRole('button', { name: /Test/ }));
-    await waitFor(() => expect(toastFn).toHaveBeenCalledWith('error', 'Connection test failed'));
+    await waitFor(() => expect(toastFn).toHaveBeenCalledWith('error', 'could not connect: refused'));
+  });
+
+  it('renders the live-probe result banner', () => {
+    testData = { status: 'error', message: 'could not connect: refused' };
+    render(<ConnectionFormModal open onClose={() => {}} connection={conn} />);
+    const banner = screen.getByRole('status');
+    expect(banner).toHaveTextContent('could not connect: refused');
   });
 
   it('requires confirmation before deleting', async () => {

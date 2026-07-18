@@ -222,7 +222,7 @@ func (s *Store) ListConnections(ctx context.Context, roles []string) ([]store.Co
 		roles = []string{}
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, type, host, status, allowed_roles
+		`SELECT `+connectionCols+`
 		 FROM connections
 		 WHERE cardinality(allowed_roles) = 0 OR allowed_roles && $1
 		 ORDER BY id ASC`, roles)
@@ -233,12 +233,9 @@ func (s *Store) ListConnections(ctx context.Context, roles []string) ([]store.Co
 
 	out := make([]store.Connection, 0)
 	for rows.Next() {
-		var c store.Connection
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Status, &c.AllowedRoles); err != nil {
+		c, err := scanConnection(rows)
+		if err != nil {
 			return nil, fmt.Errorf("postgres: scan connection: %w", err)
-		}
-		if c.AllowedRoles == nil {
-			c.AllowedRoles = []string{}
 		}
 		out = append(out, c)
 	}
@@ -620,6 +617,42 @@ func (s *Store) GetVersionDefinition(ctx context.Context, flowID string, version
 	return def, nil
 }
 
+// connectionCols is the canonical column list for connection reads, kept in one
+// place so ListConnections / GetConnection / the UPDATE RETURNING clause stay in
+// lock-step with scanConnection.
+const connectionCols = `id, name, type, host, port, database, username, ssl_mode, secret_ref, status, allowed_roles`
+
+// rowScanner is satisfied by both pgx.Row and pgx.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanConnection reads a connection row in connectionCols order.
+func scanConnection(row rowScanner) (store.Connection, error) {
+	var c store.Connection
+	if err := row.Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Port, &c.Database,
+		&c.Username, &c.SSLMode, &c.SecretRef, &c.Status, &c.AllowedRoles); err != nil {
+		return store.Connection{}, err
+	}
+	if c.AllowedRoles == nil {
+		c.AllowedRoles = []string{}
+	}
+	return c, nil
+}
+
+// GetConnection returns one connection by id. ErrNotFound when unknown.
+func (s *Store) GetConnection(ctx context.Context, id string) (store.Connection, error) {
+	c, err := scanConnection(s.pool.QueryRow(ctx,
+		`SELECT `+connectionCols+` FROM connections WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Connection{}, store.NewNotFound("connection not found: " + id)
+	}
+	if err != nil {
+		return store.Connection{}, fmt.Errorf("postgres: get connection: %w", err)
+	}
+	return c, nil
+}
+
 // CreateConnection inserts a new connection (status "untested") and returns it.
 func (s *Store) CreateConnection(ctx context.Context, in store.ConnectionInput) (store.Connection, error) {
 	c := store.Connection{
@@ -627,6 +660,11 @@ func (s *Store) CreateConnection(ctx context.Context, in store.ConnectionInput) 
 		Name:         in.Name,
 		Type:         in.Type,
 		Host:         in.Host,
+		Port:         in.Port,
+		Database:     in.Database,
+		Username:     in.Username,
+		SSLMode:      in.SSLMode,
+		SecretRef:    in.SecretRef,
 		Status:       "untested",
 		AllowedRoles: in.AllowedRoles,
 	}
@@ -634,9 +672,9 @@ func (s *Store) CreateConnection(ctx context.Context, in store.ConnectionInput) 
 		c.AllowedRoles = []string{}
 	}
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO connections (id, name, type, host, status, allowed_roles)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		c.ID, c.Name, c.Type, c.Host, c.Status, c.AllowedRoles); err != nil {
+		`INSERT INTO connections (id, name, type, host, port, database, username, ssl_mode, secret_ref, status, allowed_roles)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		c.ID, c.Name, c.Type, c.Host, c.Port, c.Database, c.Username, c.SSLMode, c.SecretRef, c.Status, c.AllowedRoles); err != nil {
 		return store.Connection{}, fmt.Errorf("postgres: create connection: %w", err)
 	}
 	return c, nil
@@ -649,21 +687,18 @@ func (s *Store) UpdateConnection(ctx context.Context, id string, in store.Connec
 	if roles == nil {
 		roles = []string{}
 	}
-	var c store.Connection
-	err := s.pool.QueryRow(ctx,
-		`UPDATE connections SET name = $2, type = $3, host = $4, allowed_roles = $5
-		 WHERE id = $1
-		 RETURNING id, name, type, host, status, allowed_roles`,
-		id, in.Name, in.Type, in.Host, roles).
-		Scan(&c.ID, &c.Name, &c.Type, &c.Host, &c.Status, &c.AllowedRoles)
+	c, err := scanConnection(s.pool.QueryRow(ctx,
+		`UPDATE connections
+		    SET name = $2, type = $3, host = $4, port = $5, database = $6,
+		        username = $7, ssl_mode = $8, secret_ref = $9, allowed_roles = $10
+		  WHERE id = $1
+		 RETURNING `+connectionCols,
+		id, in.Name, in.Type, in.Host, in.Port, in.Database, in.Username, in.SSLMode, in.SecretRef, roles))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Connection{}, store.NewNotFound("connection not found: " + id)
 	}
 	if err != nil {
 		return store.Connection{}, fmt.Errorf("postgres: update connection: %w", err)
-	}
-	if c.AllowedRoles == nil {
-		c.AllowedRoles = []string{}
 	}
 	return c, nil
 }

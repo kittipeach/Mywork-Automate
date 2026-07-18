@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +32,44 @@ import (
 	"github.com/mywork/automate/pkg/obs"
 	"github.com/mywork/automate/pkg/secrets"
 )
+
+// connPools caches one pgx pool per external-connection DSN so db.query nodes
+// that target a customer database reuse connections across runs. Safe for
+// concurrent use by parallel activities.
+type connPools struct {
+	mu      sync.Mutex
+	pools   map[string]*pgxpool.Pool
+	timeout time.Duration
+}
+
+func newConnPools(timeout time.Duration) *connPools {
+	return &connPools{pools: map[string]*pgxpool.Pool{}, timeout: timeout}
+}
+
+// openQuerier returns a Querier for dsn, creating (and caching) its pool on
+// first use. It satisfies dbquery.Deps.OpenQuerier.
+func (p *connPools) openQuerier(ctx context.Context, dsn string) (dbquery.Querier, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pool, ok := p.pools[dsn]
+	if !ok {
+		np, err := pgxpool.New(ctx, dsn)
+		if err != nil {
+			return nil, fmt.Errorf("open external pool: %w", err)
+		}
+		p.pools[dsn] = np
+		pool = np
+	}
+	return pgxquerier.New(pool, p.timeout), nil
+}
+
+func (p *connPools) closeAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pool := range p.pools {
+		pool.Close()
+	}
+}
 
 const (
 	// stmtTimeout bounds a single db.query statement (FR-DB-007); the
@@ -117,12 +156,18 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	sender := mailersmtp.New(getenv("SMTP_ADDR", defaultSMTPAddr), getenv("SMTP_FROM", defaultFrom))
 	mft := newSFTPClient(getenv("SFTP_ADDR", ""), getenv("SFTP_USER", ""), os.Getenv("SFTP_PASSWORD"))
 
+	// Per-connection pool cache: db.query nodes that target an external database
+	// (E6-S1) dial it through here, one cached pool per DSN.
+	extPools := newConnPools(stmtTimeout)
+	defer extPools.closeAll()
+
 	activities := interpreter.NewActivities(
 		dbquery.Deps{
-			Secrets:   resolver,
-			Querier:   querier,
-			Masking:   maskingEngine,
-			MaskPoint: masking.PointPreview,
+			Secrets:     resolver,
+			Querier:     querier,
+			Masking:     maskingEngine,
+			MaskPoint:   masking.PointPreview,
+			OpenQuerier: extPools.openQuerier,
 		},
 		interpreter.WithFileStore(fileStore),
 		interpreter.WithMailer(sender),
