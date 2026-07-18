@@ -51,7 +51,7 @@ if ! awk '
     for (p in tot) {
       if (tot[p]==0) continue;
       pct = 100*cov[p]/tot[p];
-      min = (p ~ /^pkg\/(masking|sqlguard|expression|templaterender)/) ? 100 : 95;
+      min = (p ~ /^pkg\/(masking|sqlguard|sqlbuilder|expression|templaterender)/) ? 100 : 95;
       if (pct < min) { printf "FAIL %s: %.1f%% < %d%%\n", p, pct, min; fail=1 }
     }
     gpct = (gtot>0) ? 100*gcov/gtot : 100;

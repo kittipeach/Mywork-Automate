@@ -172,6 +172,9 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		interpreter.WithFileStore(fileStore),
 		interpreter.WithMailer(sender),
 		interpreter.WithMFT(mft),
+		// Builder-only by default: db.query runs a server-compiled visual spec, not
+		// free-form SQL. Dev/demo can opt in with DBQUERY_ALLOW_RAW_SQL=true.
+		interpreter.WithAllowRawSQL(getenv("DBQUERY_ALLOW_RAW_SQL", "false") == "true"),
 	)
 
 	c, err := client.Dial(client.Options{HostPort: cfg.TemporalHostPort, Namespace: worker.Namespace})

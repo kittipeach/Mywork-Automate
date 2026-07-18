@@ -44,7 +44,7 @@ func newTestActivities(t *testing.T, q dbquery.Querier) *Activities {
 		Querier:   q,
 		Masking:   eng,
 		MaskPoint: masking.PointPreview,
-	})
+	}, WithAllowRawSQL(true)) // existing tests exercise the raw-SQL execution path
 }
 
 // --- Fakes for the file/delivery node deps ---
@@ -848,4 +848,78 @@ func TestExecuteNode_TriggerPassThrough(t *testing.T) {
 		require.NoError(t, err, "type %s should pass through, not error", typ)
 		require.Equal(t, in, res.Items, "type %s should pass items through unchanged", typ)
 	}
+}
+
+// --- E6-S2 hardening: builder-only query policy ---
+
+func TestExecDBQuery_BuilderSpecCompiles(t *testing.T) {
+	// The querier records the SQL it is handed so we can assert the server built
+	// it from the structured spec (not from any client SQL).
+	var gotSQL string
+	var gotArgs []any
+	rec := recordingQuerier{rs: dbquery.RowSet{Columns: []string{"name"}, Rows: [][]any{{"a"}}}, sql: &gotSQL, args: &gotArgs}
+	a := newTestActivities(t, rec)
+
+	cfg, _ := json.Marshal(map[string]any{
+		"mode":    "builder",
+		"maxRows": 100,
+		"builder": map[string]any{
+			"table":   "employees",
+			"columns": []map[string]any{{"name": "name"}, {"name": "salary"}},
+			"where":   []map[string]any{{"column": "salary", "op": ">=", "value": 50000}},
+			"limit":   10,
+		},
+	})
+	res, err := a.ExecuteNode(context.Background(), NodeExecRequest{NodeID: "q", Type: "db.query", Config: cfg})
+	require.NoError(t, err)
+	require.Len(t, res.Items, 1)
+	require.Equal(t, `SELECT "name", "salary" FROM "employees" WHERE "salary" >= $1 LIMIT 10`, gotSQL)
+	require.Equal(t, []any{float64(50000)}, gotArgs) // JSON numbers decode to float64
+}
+
+func TestExecDBQuery_RawSQLDisabledByDefault(t *testing.T) {
+	// Default policy (no WithAllowRawSQL): a node carrying hand-written SQL is
+	// rejected — no free query reaches the database.
+	a := NewActivities(dbquery.Deps{Secrets: stubResolver{}, Querier: stubQuerier{}, Masking: mustEngine(t), MaskPoint: masking.PointPreview})
+	cfg, _ := json.Marshal(map[string]any{"mode": "sql", "sql": "SELECT * FROM employees"})
+	_, err := a.ExecuteNode(context.Background(), NodeExecRequest{NodeID: "q", Type: "db.query", Config: cfg})
+	require.Error(t, err)
+	require.ErrorIs(t, err, errRawSQLDisabled)
+}
+
+func TestExecDBQuery_NoQuerySpec(t *testing.T) {
+	a := newTestActivities(t, stubQuerier{})
+	cfg, _ := json.Marshal(map[string]any{"maxRows": 10}) // no builder, no sql
+	_, err := a.ExecuteNode(context.Background(), NodeExecRequest{NodeID: "q", Type: "db.query", Config: cfg})
+	require.Error(t, err)
+}
+
+func TestExecDBQuery_BuilderRejectsInjection(t *testing.T) {
+	a := newTestActivities(t, stubQuerier{})
+	cfg, _ := json.Marshal(map[string]any{
+		"mode":    "builder",
+		"builder": map[string]any{"table": "employees", "columns": []map[string]any{{"name": "name; DROP TABLE x"}}},
+	})
+	_, err := a.ExecuteNode(context.Background(), NodeExecRequest{NodeID: "q", Type: "db.query", Config: cfg})
+	require.Error(t, err) // sqlbuilder rejects the malicious identifier
+}
+
+func mustEngine(t *testing.T) *masking.Engine {
+	t.Helper()
+	e, err := masking.NewEngine(masking.DefaultRules())
+	require.NoError(t, err)
+	return e
+}
+
+// recordingQuerier captures the SQL/args passed to Query.
+type recordingQuerier struct {
+	rs   dbquery.RowSet
+	sql  *string
+	args *[]any
+}
+
+func (r recordingQuerier) Query(_ context.Context, sql string, args []any) (dbquery.RowSet, error) {
+	*r.sql = sql
+	*r.args = args
+	return r.rs, nil
 }
