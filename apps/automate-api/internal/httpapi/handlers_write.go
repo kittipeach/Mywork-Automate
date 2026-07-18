@@ -500,6 +500,32 @@ func (h *handlers) info(msg string, kv ...any) {
 	}
 }
 
+// stashConnPassword moves a raw password (dev convenience) out of the connection
+// input and into the secret store, recording only the generated SecretRef. It is
+// the enforcement point for "credentials never touch the control-plane DB": the
+// returned input carries a SecretRef, never a Password. When no password is
+// supplied it is a no-op (the caller provided a SecretRef, or none is needed).
+func (h *handlers) stashConnPassword(ctx context.Context, in store.ConnectionInput) (store.ConnectionInput, bool) {
+	if in.Password == "" {
+		return in, true
+	}
+	if h.secretsWriter == nil {
+		return in, false
+	}
+	name := in.SecretRef
+	if name == "" {
+		buf := make([]byte, 16)
+		_, _ = rand.Read(buf)
+		name = "connpw_" + hex.EncodeToString(buf)
+	}
+	if err := h.secretsWriter.Write(ctx, name, in.Password); err != nil {
+		return in, false
+	}
+	in.SecretRef = name
+	in.Password = ""
+	return in, true
+}
+
 // createConnection → POST /connections → 201 the new connection.
 func (h *handlers) createConnection(c *gin.Context) {
 	var in store.ConnectionInput
@@ -509,6 +535,12 @@ func (h *handlers) createConnection(c *gin.Context) {
 	}
 	if in.Name == "" || in.Type == "" {
 		errorEnvelope(c, http.StatusBadRequest, "bad_request", "name and type are required")
+		return
+	}
+	in, ok := h.stashConnPassword(c.Request.Context(), in)
+	if !ok {
+		errorEnvelope(c, http.StatusBadRequest, "bad_request",
+			"cannot save password: no secret store configured — set secretRef to an existing secret instead")
 		return
 	}
 	conn, err := h.store.CreateConnection(c.Request.Context(), in)
@@ -530,6 +562,12 @@ func (h *handlers) updateConnection(c *gin.Context) {
 	var in store.ConnectionInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		errorEnvelope(c, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	in, ok := h.stashConnPassword(c.Request.Context(), in)
+	if !ok {
+		errorEnvelope(c, http.StatusBadRequest, "bad_request",
+			"cannot save password: no secret store configured — set secretRef to an existing secret instead")
 		return
 	}
 	conn, err := h.store.UpdateConnection(c.Request.Context(), c.Param("id"), in)
@@ -570,8 +608,45 @@ func (h *handlers) deleteConnection(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// testConnection → POST /connections/{id}/test. A stub for E-phase: returns a
-// canned ok result (a live probe lands with the secrets resolver later).
+// testConnection → POST /connections/{id}/test. Live reachability probe: resolve
+// the connection's password from the secret store, build its DSN and dial it
+// (SELECT 1). The result is reported in the body — a failed probe is a 200 with
+// status:"error" (the request succeeded; the target is what's unreachable), not
+// an HTTP error. The password is never echoed; only the dial outcome is.
 func (h *handlers) testConnection(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	ctx := c.Request.Context()
+	conn, err := h.store.GetConnection(ctx, c.Param("id"))
+	if err != nil {
+		if store.IsNotFound(err) {
+			errorEnvelope(c, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		errorEnvelope(c, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	if h.dialer == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "unknown", "message": "connection testing is not configured on this server"})
+		return
+	}
+	password := ""
+	if conn.SecretRef != "" {
+		if h.secretsResolver == nil {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "message": "secret store not configured"})
+			return
+		}
+		if password, err = h.secretsResolver.Resolve(ctx, conn.SecretRef); err != nil {
+			c.JSON(http.StatusOK, gin.H{"status": "error", "message": "could not resolve the connection secret"})
+			return
+		}
+	}
+	dsn := conn.DSN(password)
+	if dsn == "" {
+		c.JSON(http.StatusOK, gin.H{"status": "error", "message": "connection is missing host / database / username (postgres only)"})
+		return
+	}
+	if err := h.dialer.Ping(ctx, dsn); err != nil {
+		c.JSON(http.StatusOK, gin.H{"status": "error", "message": "could not connect: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "connected"})
 }

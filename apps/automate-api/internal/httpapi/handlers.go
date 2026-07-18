@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/mywork/automate/apps/automate-api/internal/store"
 	"github.com/mywork/automate/pkg/authz"
 	"github.com/mywork/automate/pkg/masking"
+	"github.com/mywork/automate/pkg/secrets"
 )
 
 // defaultRole is assumed when the caller sends no X-Role header. admin sees all
@@ -58,6 +60,38 @@ type handlers struct {
 	// mask is the masking engine applied to preview results at the preview point.
 	// Never nil once NewRouter has built it from masking.DefaultRules().
 	mask *masking.Engine
+
+	// External-connection deps (E6-S1), injected via WithConnDeps; all optional.
+	// secretsWriter saves a connection password into the secret store in dev (nil
+	// in prod — secretRef is provisioned in Key Vault instead). secretsResolver
+	// reads a connection's password for the test-connection dial. dialer performs
+	// the actual reachability probe. When a dep is nil the relevant endpoint
+	// degrades gracefully (password ignored / test reports "not configured").
+	secretsWriter   secrets.Writer
+	secretsResolver secrets.Resolver
+	dialer          ConnDialer
+}
+
+// ConnDialer probes an external database for reachability (test-connection). The
+// implementation opens a short-lived connection to dsn and runs a trivial query;
+// it returns nil on success. Kept behind an interface so the handler is unit
+// tested without a real database.
+type ConnDialer interface {
+	Ping(ctx context.Context, dsn string) error
+}
+
+// RouterOption configures optional handler dependencies without widening
+// NewRouter's positional signature (keeping its many existing callers intact).
+type RouterOption func(*handlers)
+
+// WithConnDeps injects the external-connection secret store + dialer used by the
+// connection create/update/test endpoints.
+func WithConnDeps(w secrets.Writer, r secrets.Resolver, d ConnDialer) RouterOption {
+	return func(h *handlers) {
+		h.secretsWriter = w
+		h.secretsResolver = r
+		h.dialer = d
+	}
 }
 
 // record appends one audit entry after a mutating action has already succeeded.

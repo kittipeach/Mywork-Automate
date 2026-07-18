@@ -248,11 +248,28 @@ func (f *fakeStore) GetVersionDefinition(_ context.Context, flowID string, versi
 	return flowspec.FlowDef{}, store.NewNotFound("version not found")
 }
 
+func connFromInput(id, status string, in store.ConnectionInput) store.Connection {
+	return store.Connection{
+		ID: id, Name: in.Name, Type: in.Type, Host: in.Host, Port: in.Port,
+		Database: in.Database, Username: in.Username, SSLMode: in.SSLMode,
+		SecretRef: in.SecretRef, Status: status, AllowedRoles: in.AllowedRoles,
+	}
+}
+
+func (f *fakeStore) GetConnection(_ context.Context, id string) (store.Connection, error) {
+	for _, c := range f.conns {
+		if c.ID == id {
+			return c, nil
+		}
+	}
+	return store.Connection{}, store.NewNotFound("connection not found: " + id)
+}
+
 func (f *fakeStore) CreateConnection(_ context.Context, in store.ConnectionInput) (store.Connection, error) {
 	if f.errWrite != nil {
 		return store.Connection{}, f.errWrite
 	}
-	return store.Connection{ID: "conn_new", Name: in.Name, Type: in.Type, Host: in.Host, Status: "untested", AllowedRoles: in.AllowedRoles}, nil
+	return connFromInput("conn_new", "untested", in), nil
 }
 
 func (f *fakeStore) UpdateConnection(_ context.Context, id string, in store.ConnectionInput) (store.Connection, error) {
@@ -261,7 +278,7 @@ func (f *fakeStore) UpdateConnection(_ context.Context, id string, in store.Conn
 	}
 	for _, c := range f.conns {
 		if c.ID == id {
-			return store.Connection{ID: id, Name: in.Name, Type: in.Type, Host: in.Host, Status: c.Status, AllowedRoles: in.AllowedRoles}, nil
+			return connFromInput(id, c.Status, in), nil
 		}
 	}
 	return store.Connection{}, store.NewNotFound("connection not found: " + id)
@@ -484,9 +501,11 @@ func TestConnectionCRUD(t *testing.T) {
 	if wdn.Code != http.StatusNotFound {
 		t.Fatalf("delete nf = %d, want 404", wdn.Code)
 	}
-	// test connection stub
+	// test connection: this router wires no ConnDialer, so the live probe reports
+	// "unknown" (testing not configured) rather than dialing. The dial path itself
+	// is covered by TestTestConnection_LiveProbe.
 	wt, tb := doReq(t, r, http.MethodPost, "/api/automate/v1/connections/conn_hr/test", nil)
-	if wt.Code != http.StatusOK || tb["status"] != "ok" {
+	if wt.Code != http.StatusOK || tb["status"] != "unknown" {
 		t.Fatalf("test = %d %v", wt.Code, tb["status"])
 	}
 }
