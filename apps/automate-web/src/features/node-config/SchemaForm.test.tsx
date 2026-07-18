@@ -15,11 +15,44 @@ beforeEach(() => cleanup());
 
 describe('SchemaForm — render per type', () => {
   it('renders a text input with a linked label (htmlFor)', () => {
-    render(<SchemaForm schema={dbSchema} formId="db" />);
-    const input = screen.getByLabelText(/Connection/i);
+    // Inline text fixture (db.query's connectionId is now a connection dropdown).
+    const textSchema: JSONSchema = { type: 'object', properties: { label: { type: 'string', title: 'Label' } } };
+    render(<SchemaForm schema={textSchema} formId="db" />);
+    const input = screen.getByLabelText(/Label/i);
     expect(input).toBeInTheDocument();
     expect(input.tagName).toBe('INPUT');
     expect(input).toHaveAttribute('id');
+  });
+
+  it('renders a format:connection field as a dropdown filtered by connectionType', () => {
+    const connSchema: JSONSchema = {
+      type: 'object',
+      properties: { connectionId: { type: 'string', title: 'Connection', format: 'connection', connectionType: 'postgres' } },
+    };
+    render(
+      <SchemaForm
+        schema={connSchema}
+        formId="db"
+        connectionOptions={[
+          { value: 'conn_pg', label: 'HR PG (postgres)', type: 'postgres' },
+          { value: 'conn_sftp', label: 'Bank MFT (sftp)', type: 'sftp' },
+        ]}
+      />,
+    );
+    const select = screen.getByLabelText(/Connection/i) as HTMLSelectElement;
+    expect(select.tagName).toBe('SELECT');
+    // only the postgres connection is offered (sftp filtered out)
+    expect(screen.getByRole('option', { name: 'HR PG (postgres)' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Bank MFT (sftp)' })).not.toBeInTheDocument();
+  });
+
+  it('a connection field with no matching options prompts to create one', () => {
+    const connSchema: JSONSchema = {
+      type: 'object',
+      properties: { connectionId: { type: 'string', title: 'Connection', format: 'connection', connectionType: 'sftp' } },
+    };
+    render(<SchemaForm schema={connSchema} formId="d" connectionOptions={[{ value: 'c', label: 'pg', type: 'postgres' }]} />);
+    expect(screen.getByText(/create one first/i)).toBeInTheDocument();
   });
 
   it('renders an enum as a select using enumLabels', () => {
@@ -97,7 +130,8 @@ describe('SchemaForm — render per type', () => {
 describe('SchemaForm — validation + validity callback', () => {
   it('reports invalid on mount when required fields are empty, then valid once filled', async () => {
     const onValidity = vi.fn();
-    render(<SchemaForm schema={dbSchema} formId="db" onValidityChange={onValidity} />);
+    const pgOpts = [{ value: 'conn_hr', label: 'HR', type: 'postgres' }];
+    render(<SchemaForm schema={dbSchema} formId="db" onValidityChange={onValidity} connectionOptions={pgOpts} />);
     // db.query requires connectionId (empty by default) → invalid
     await waitFor(() => expect(onValidity).toHaveBeenCalledWith(false));
 
@@ -117,7 +151,7 @@ describe('SchemaForm — validation + validity callback', () => {
 
   it('emits value changes through onChange', async () => {
     const onChange = vi.fn();
-    render(<SchemaForm schema={dbSchema} formId="db" onChange={onChange} />);
+    render(<SchemaForm schema={dbSchema} formId="db" onChange={onChange} connectionOptions={[{ value: 'abc', label: 'abc', type: 'postgres' }]} />);
     fireEvent.change(screen.getByLabelText(/Connection/i), { target: { value: 'abc' } });
     await waitFor(() => {
       const last = onChange.mock.calls.at(-1)?.[0];
@@ -158,10 +192,11 @@ describe('SchemaForm — conditional (dependentSchemas) fields', () => {
   });
 
   it('re-initialises when formId (node) changes', () => {
-    const { rerender } = render(<SchemaForm schema={dbSchema} formId="node-a" value={{ connectionId: 'a' }} />);
-    expect((screen.getByLabelText(/Connection/i) as HTMLInputElement).value).toBe('a');
-    rerender(<SchemaForm schema={dbSchema} formId="node-b" value={{ connectionId: 'b' }} />);
-    expect((screen.getByLabelText(/Connection/i) as HTMLInputElement).value).toBe('b');
+    const opts = [{ value: 'a', label: 'A', type: 'postgres' }, { value: 'b', label: 'B', type: 'postgres' }];
+    const { rerender } = render(<SchemaForm schema={dbSchema} formId="node-a" value={{ connectionId: 'a' }} connectionOptions={opts} />);
+    expect((screen.getByLabelText(/Connection/i) as HTMLSelectElement).value).toBe('a');
+    rerender(<SchemaForm schema={dbSchema} formId="node-b" value={{ connectionId: 'b' }} connectionOptions={opts} />);
+    expect((screen.getByLabelText(/Connection/i) as HTMLSelectElement).value).toBe('b');
   });
 });
 

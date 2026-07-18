@@ -18,6 +18,9 @@ import {
   type FormValues,
 } from './schemaToZod';
 
+/** One option for a format:'connection' dropdown (dynamic, from the live list). */
+export type ConnectionOption = { value: string; label: string; type?: string };
+
 export type SchemaFormProps = {
   schema: JSONSchema;
   /** Current stored values for the node (merged over schema defaults). */
@@ -28,6 +31,8 @@ export type SchemaFormProps = {
   formId?: string;
   /** upstream node names offered in the expression data picker (E3-S3). */
   availableNodes?: string[];
+  /** live connections that populate format:'connection' fields (E6-S1). */
+  connectionOptions?: ConnectionOption[];
 };
 
 function fieldId(formId: string, name: string) {
@@ -41,6 +46,7 @@ export function SchemaForm({
   onValidityChange,
   formId = 'schema-form',
   availableNodes = [],
+  connectionOptions = [],
 }: SchemaFormProps) {
   const initial = useMemo<FormValues>(
     () => ({ ...defaultsFor(schema), ...(value ?? {}) }),
@@ -89,6 +95,7 @@ export function SchemaForm({
           formId={formId}
           error={errors[field.name]}
           availableNodes={availableNodes}
+          connectionOptions={connectionOptions}
         />
       ))}
       {fields.length === 0 && (
@@ -104,6 +111,7 @@ function Field({
   formId,
   error,
   availableNodes,
+  connectionOptions = [],
 }: {
   field: FieldSpec;
   // react-hook-form's Control is intentionally type-erased here (the form shape
@@ -113,6 +121,7 @@ function Field({
   formId: string;
   error?: string;
   availableNodes: string[];
+  connectionOptions?: ConnectionOption[];
 }) {
   const s = field.schema;
   const id = fieldId(formId, field.name);
@@ -194,6 +203,45 @@ function Field({
           )}
         />
         {s.description && <p className="text-xs text-ink-subtle">{s.description}</p>}
+        <FieldError id={errorId} message={error} />
+      </div>
+    );
+  }
+
+  // format:'connection' → a dropdown of live connections (dynamic, not free text),
+  // narrowed to the field's connectionType when set (E6-S1).
+  if (s.format === 'connection') {
+    const opts = connectionOptions.filter((o) => !s.connectionType || o.type === s.connectionType);
+    return (
+      <div className="space-y-1">
+        {labelEl}
+        <Controller
+          name={field.name}
+          control={control}
+          render={({ field: f }) => (
+            <select
+              id={id}
+              value={(f.value as string) ?? ''}
+              onChange={f.onChange}
+              onBlur={f.onBlur}
+              aria-invalid={error ? 'true' : undefined}
+              aria-describedby={describedBy}
+              className={cn(
+                'h-9 w-full rounded-md border bg-surface px-3 text-sm outline-none focus:ring-2 focus:ring-brand',
+                error ? 'border-danger' : 'border-border',
+              )}
+            >
+              <option value="">— select a connection —</option>
+              {opts.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          )}
+        />
+        {s.description && <p className="text-xs text-ink-subtle">{s.description}</p>}
+        {opts.length === 0 && <p className="text-xs text-ink-subtle">No matching connections — create one first.</p>}
         <FieldError id={errorId} message={error} />
       </div>
     );

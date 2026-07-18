@@ -23,6 +23,9 @@ type JSONSchema struct {
 	EnumLabels       []string                                    `json:"enumLabels,omitempty"`
 	Default          any                                         `json:"default,omitempty"`
 	Format           string                                      `json:"format,omitempty"`
+	// ConnectionType narrows a format:"connection" field to one connection type
+	// (e.g. "postgres", "sftp") so the UI dropdown only offers matching ones.
+	ConnectionType   string                                      `json:"connectionType,omitempty"`
 	Items            *JSONSchema                                 `json:"items,omitempty"`
 	Minimum          *float64                                    `json:"minimum,omitempty"`
 	Maximum          *float64                                    `json:"maximum,omitempty"`
@@ -107,7 +110,7 @@ var nodeTypes = []NodeType{
 		Schema: JSONSchema{
 			Type: "object",
 			Properties: props(map[string]JSONSchema{
-				"connectionId": {Type: "string", Title: "Connection", Description: "Postgres connection (RBAC-filtered)."},
+				"connectionId": {Type: "string", Title: "Connection", Format: "connection", ConnectionType: "postgres", Description: "Postgres connection (RBAC-filtered)."},
 				"maxRows":      {Type: "number", Title: "Max rows", Minimum: fptr(1), Maximum: fptr(100000), Default: float64(1000)},
 				// The query itself is built with the visual QueryBuilder (a
 				// structured, server-compiled spec — no free-form SQL field). See
@@ -190,7 +193,7 @@ var nodeTypes = []NodeType{
 		Schema: JSONSchema{
 			Type: "object",
 			Properties: props(map[string]JSONSchema{
-				"connectionId": {Type: "string", Title: "SFTP connection"},
+				"connectionId": {Type: "string", Title: "SFTP connection", Format: "connection", ConnectionType: "sftp"},
 				"remotePath":   {Type: "string", Title: "Remote path", Format: "expression", Default: "/upload/"},
 				"auth":         {Type: "string", Title: "Auth", Enum: []string{"password", "sshKey"}, Default: "sshKey"},
 				"retries":      {Type: "number", Title: "Retries", Minimum: fptr(0), Maximum: fptr(10), Default: float64(3)},

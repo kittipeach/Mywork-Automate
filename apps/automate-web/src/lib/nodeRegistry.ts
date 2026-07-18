@@ -12,7 +12,9 @@ export type JSONSchema = {
   enum?: string[];
   enumLabels?: string[];
   default?: unknown;
-  format?: 'expression' | 'sql' | 'textarea' | 'password';
+  format?: 'expression' | 'sql' | 'textarea' | 'password' | 'connection';
+  /** Narrows a format:'connection' field to one connection type (postgres/sftp). */
+  connectionType?: string;
   items?: JSONSchema;
   minimum?: number;
   maximum?: number;
@@ -84,7 +86,7 @@ export const NODE_TYPES: NodeType[] = [
     schema: {
       type: 'object',
       properties: {
-        connectionId: { type: 'string', title: 'Connection', description: 'Postgres connection (RBAC-filtered).' },
+        connectionId: { type: 'string', title: 'Connection', format: 'connection', connectionType: 'postgres', description: 'Postgres connection (RBAC-filtered).' },
         maxRows: { type: 'number', title: 'Max rows', minimum: 1, maximum: 100000, default: 1000 },
         // The query is built with the visual QueryBuilder (a structured,
         // server-compiled spec — no free-form SQL field).
@@ -166,7 +168,7 @@ export const NODE_TYPES: NodeType[] = [
     schema: {
       type: 'object',
       properties: {
-        connectionId: { type: 'string', title: 'SFTP connection' },
+        connectionId: { type: 'string', title: 'SFTP connection', format: 'connection', connectionType: 'sftp' },
         remotePath: { type: 'string', title: 'Remote path', format: 'expression', default: '/upload/' },
         auth: { type: 'string', title: 'Auth', enum: ['password', 'sshKey'], default: 'sshKey' },
         retries: { type: 'number', title: 'Retries', minimum: 0, maximum: 10, default: 3 },
