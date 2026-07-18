@@ -16,6 +16,14 @@ export type ConnectionInput = {
   name: string;
   type: ConnectionType;
   host: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  sslMode?: string;
+  /** Write-only (dev): saved to the secret store; never returned. */
+  password?: string;
+  /** Existing secret name (prod path). */
+  secretRef?: string;
   allowedRoles?: string[];
 };
 
@@ -53,12 +61,18 @@ export function useDeleteConnection() {
   });
 }
 
-export type TestConnectionResult = { status: 'ok' };
+/**
+ * Live-probe result. The probe itself is a 200 even when the target is
+ * unreachable: `status` carries the outcome (`ok` connected, `error` could not
+ * connect / bad config, `unknown` testing not configured on the server) and
+ * `message` a human reason. The password is never echoed in `message`.
+ */
+export type TestConnectionResult = { status: 'ok' | 'error' | 'unknown'; message?: string };
 
 /**
- * POST /connections/{id}/test → {status:"ok"}. A non-2xx (unreachable host, bad
- * creds) surfaces as an ApiError so the form can render "failed". Does not
- * invalidate — testing is a read-only probe.
+ * POST /connections/{id}/test → {status, message}. Read-only probe; does not
+ * invalidate. Network/HTTP errors still reject (ApiError); a reachable server
+ * reporting an unreachable target resolves with status:"error".
  */
 export function useTestConnection() {
   return useMutation({

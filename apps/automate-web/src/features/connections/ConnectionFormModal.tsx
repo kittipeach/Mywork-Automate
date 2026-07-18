@@ -24,6 +24,7 @@ import {
   emptyConnectionForm,
   CONNECTION_TYPES,
   ROLES,
+  SSL_MODES,
   type ConnectionFormValues,
 } from './connectionSchema';
 
@@ -36,7 +37,18 @@ export type ConnectionFormModalProps = {
 
 function toFormValues(c?: Connection | null): ConnectionFormValues {
   if (!c) return emptyConnectionForm;
-  return { name: c.name, type: c.type, host: c.host, allowedRoles: c.allowedRoles };
+  return {
+    name: c.name,
+    type: c.type,
+    host: c.host,
+    port: c.port ?? 5432,
+    database: c.database ?? '',
+    username: c.username ?? '',
+    sslMode: (c.sslMode as ConnectionFormValues['sslMode']) ?? 'disable',
+    password: '', // never pre-filled; blank on edit keeps the stored secret
+    secretRef: c.secretRef ?? '',
+    allowedRoles: c.allowedRoles,
+  };
 }
 
 export function ConnectionFormModal({ open, onClose, connection }: ConnectionFormModalProps) {
@@ -45,6 +57,7 @@ export function ConnectionFormModal({ open, onClose, connection }: ConnectionFor
   const {
     register,
     control,
+    watch,
     handleSubmit,
     reset,
     formState: { errors },
@@ -52,6 +65,7 @@ export function ConnectionFormModal({ open, onClose, connection }: ConnectionFor
     resolver: zodResolver(connectionFormSchema),
     defaultValues: toFormValues(connection),
   });
+  const type = watch('type');
 
   const create = useCreateConnection();
   const update = useUpdateConnection();
@@ -96,7 +110,8 @@ export function ConnectionFormModal({ open, onClose, connection }: ConnectionFor
   const onTest = () => {
     if (!connection) return;
     test.mutate(connection.id, {
-      onSuccess: () => toast('success', 'Connection OK'),
+      onSuccess: (r) =>
+        toast(r.status === 'ok' ? 'success' : 'error', r.message || (r.status === 'ok' ? 'Connection OK' : 'Connection test failed')),
       onError: () => toast('error', 'Connection test failed'),
     });
   };
@@ -181,12 +196,91 @@ export function ConnectionFormModal({ open, onClose, connection }: ConnectionFor
         <Field label="Host" htmlFor="conn-host" error={errors.host?.message}>
           <input
             id="conn-host"
-            placeholder="host.internal:5432"
+            placeholder="host.internal"
             {...register('host')}
             aria-invalid={errors.host ? 'true' : undefined}
             className={inputCls(!!errors.host)}
           />
         </Field>
+
+        {type === 'postgres' && (
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Database" htmlFor="conn-db" error={errors.database?.message}>
+              <input
+                id="conn-db"
+                placeholder="hr"
+                {...register('database')}
+                aria-invalid={errors.database ? 'true' : undefined}
+                className={inputCls(!!errors.database)}
+              />
+            </Field>
+            <Field label="Port" htmlFor="conn-port" error={errors.port?.message}>
+              <input
+                id="conn-port"
+                type="number"
+                placeholder="5432"
+                {...register('port')}
+                aria-invalid={errors.port ? 'true' : undefined}
+                className={inputCls(!!errors.port)}
+              />
+            </Field>
+            <Field label="Username" htmlFor="conn-user" error={errors.username?.message}>
+              <input
+                id="conn-user"
+                placeholder="reader"
+                {...register('username')}
+                aria-invalid={errors.username ? 'true' : undefined}
+                className={inputCls(!!errors.username)}
+              />
+            </Field>
+            <Field label="SSL mode" htmlFor="conn-ssl" error={errors.sslMode?.message}>
+              <select id="conn-ssl" {...register('sslMode')} className={inputCls(!!errors.sslMode)}>
+                {SSL_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Password" htmlFor="conn-pw" error={errors.password?.message}>
+              <input
+                id="conn-pw"
+                type="password"
+                autoComplete="new-password"
+                placeholder={isEdit ? 'leave blank to keep current' : '••••••••'}
+                {...register('password')}
+                className={inputCls(false)}
+              />
+            </Field>
+            <Field label="Secret name (optional)" htmlFor="conn-secret" error={errors.secretRef?.message}>
+              <input
+                id="conn-secret"
+                placeholder="existing Key Vault secret"
+                {...register('secretRef')}
+                className={inputCls(false)}
+              />
+            </Field>
+            <p className="col-span-2 -mt-1 text-xs text-ink-muted">
+              Enter a password to store it securely (dev), or reference an existing secret by name (prod). The
+              password is never saved on the connection itself.
+            </p>
+          </div>
+        )}
+
+        {isEdit && test.data && (
+          <div
+            role="status"
+            className={cn(
+              'rounded-md border px-3 py-2 text-sm',
+              test.data.status === 'ok'
+                ? 'border-success/40 bg-success/10 text-success'
+                : 'border-danger/40 bg-danger/10 text-danger',
+            )}
+          >
+            {test.data.status === 'ok' ? '✓ ' : '✕ '}
+            {test.data.message || test.data.status}
+          </div>
+        )}
 
         <Field label="Allowed roles" htmlFor="conn-roles" error={errors.allowedRoles?.message}>
           <Controller
