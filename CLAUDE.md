@@ -177,11 +177,11 @@ the db.query demo is **external** — seed it with `scripts/seed-employees.sql`.
 ## 10. Status (2026-07-18)
 
 Phase 1 MVP is functional end-to-end (login/RBAC/masking/versioning/engine/
-history/audit). Recently landed on `feature/security-hardening` (merged) and
-`feature/db-connections`: masking numeric-leak fix, auth fail-open → fail-closed,
+history/audit). Landed: masking numeric-leak fix, auth fail-open → fail-closed,
 all 11 govulncheck CVEs cleared, Next 16 + React 19, ESLint 9 flat config +
-golangci clean, **external DB connections (backend + live test-connect + per-
-connection run-time dialing)**, and **SSO auth via HttpOnly cookie**.
-**In progress / backlog**: connections admin **form fields + Test button (FE)** and
-a full second-DB E2E; real Entra **JWKS** validation for prod SSO; prod still
-trusts a gateway-injected `X-Role`. See `docs/spec/09-phase-plan.md` for P2–P4.
+golangci clean, **external DB connections** (admin form + dial fields + live
+test-connect + per-connection run-time dialing, backend & FE), and **SSO auth via
+HttpOnly cookie** (login sets it, logout clears it). All merged to `main`.
+**Backlog**: a full second-DB integration E2E; real Entra **JWKS** validation for
+prod SSO (today prod trusts a gateway-injected `X-Role`); connections admin UI
+polish. See `docs/spec/09-phase-plan.md` for P2–P4.

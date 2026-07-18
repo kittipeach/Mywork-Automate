@@ -135,7 +135,8 @@ password to the secret store and persists only its `secretRef`; `POST
 /connections/:id/test` dials it live. At run start the API resolves each db.query
 node's `connectionId` into dial fields (injected into the node config); the worker
 resolves the password from the secret store and dials a **per-connection pool**.
-Backend is done; the admin form fields + Test button are the remaining FE piece.
+The admin form captures host/port/database/username + password (or a `secretRef`)
+with a live **Test** button that surfaces the probe result. End to end and tested.
 
 ### Auth / SSO (E2-S1/S2/S3)
 Identity resolves from a **Bearer JWT** or the **`mw_access_token` cookie** (SSO),
