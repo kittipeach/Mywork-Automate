@@ -9,6 +9,7 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
+	"github.com/mywork/automate/apps/automate-api/internal/auth/entra"
 	"github.com/mywork/automate/pkg/authz"
 )
 
@@ -38,6 +39,10 @@ type authDeps struct {
 	service *auth.Service
 	log     func(msg string, kv ...any)
 	audit   audit.Service
+	// entra validates Microsoft Entra ID access tokens (prod SSO, E2-S1). nil when
+	// not configured; when set, a bearer/cookie token is checked against it after
+	// the local issuer. Its app-role claims map 1:1 to authz roles.
+	entra *entra.Verifier
 	// protected marks a sit/uat/prod environment. When true, resolveRole fails
 	// closed (401) for a request that resolves no identity instead of granting
 	// the dev default role — a banking-grade deny-by-default posture. It is false
@@ -81,14 +86,19 @@ func resolveRole(deps authDeps) gin.HandlerFunc {
 // environment — the caller (resolveRole) then denies with 401. In dev the
 // default role is always resolved (ok=true) so local flows keep working.
 func roleFromContext(deps authDeps, c *gin.Context) (authz.Role, bool) {
-	if deps.service != nil {
-		if tok := requestToken(c); tok != "" {
+	if tok := requestToken(c); tok != "" {
+		// 1a. Local dev issuer (HMAC).
+		if deps.service != nil {
 			if claims, err := deps.service.Verify(tok); err == nil {
-				candidates := make([]authz.Role, 0, len(claims.Roles))
-				for _, r := range claims.Roles {
-					candidates = append(candidates, authz.Role(r))
+				if best, ok := highestOf(claims.Roles); ok {
+					return best, true
 				}
-				if best, ok := authz.Highest(candidates); ok {
+			}
+		}
+		// 1b. Entra ID (prod SSO): RS256 verified against the tenant JWKS.
+		if deps.entra != nil {
+			if claims, err := deps.entra.Verify(c.Request.Context(), tok); err == nil {
+				if best, ok := highestOf(claims.Roles); ok {
 					return best, true
 				}
 			}
@@ -114,6 +124,16 @@ func roleFromContext(deps authDeps, c *gin.Context) (authz.Role, bool) {
 		return "", false
 	}
 	return authz.Role(defaultRole), true
+}
+
+// highestOf maps a token's role-claim strings to the highest-privilege authz
+// role. The second return is false when none names a valid role.
+func highestOf(roles []string) (authz.Role, bool) {
+	candidates := make([]authz.Role, 0, len(roles))
+	for _, r := range roles {
+		candidates = append(candidates, authz.Role(r))
+	}
+	return authz.Highest(candidates)
 }
 
 // requestToken returns the caller's JWT from the Authorization header, or — when

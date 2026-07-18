@@ -140,12 +140,14 @@ the db.query demo is **external** — seed it with `scripts/seed-employees.sql`.
 - **RBAC** (`pkg/authz` + `internal/httpapi/rbac.go`): four roles
   admin > designer > operator > viewer, deny-by-default matrix. Every handler behind
   `RequirePermission`/`RequireAdmin`.
-- **Auth / SSO**: identity from a **Bearer JWT** or the **`mw_access_token` cookie**
-  (verified by the local auth service), else gateway-injected `X-Role`, else the
-  default. In **protected envs a request that resolves no identity fails closed
-  (401)** — never the admin default (that fail-open bug is fixed). Login sets the
-  HttpOnly cookie; `POST /auth/logout` clears it. Local auth is refused at startup
-  in sit/uat/prod (config guard + `scripts/policy-check-local-auth.sh`).
+- **Auth / SSO**: identity from a **Bearer JWT** or the **`mw_access_token` cookie**,
+  verified by (a) the local dev issuer (HMAC) and/or (b) **Microsoft Entra ID**
+  (`internal/auth/entra` — RS256 against the tenant JWKS, issuer/audience/expiry
+  enforced, `roles` app-role claim → authz role; enabled via `ENTRA_TENANT_ID` +
+  `ENTRA_AUDIENCE`). Else the gateway-injected `X-Role`, else the default. In
+  **protected envs a request that resolves no identity fails closed (401)** — never
+  the admin default. Login sets the HttpOnly cookie; `POST /auth/logout` clears it.
+  Local auth is refused at startup in sit/uat/prod (config guard + policy check).
 - **Connections → external DB**: admin sets host/port/db/user + password (saved to
   the secret store); `POST /connections/:id/test` dials live. At run start the API
   injects each db.query node's connection dial fields; the worker resolves the
@@ -182,6 +184,8 @@ all 11 govulncheck CVEs cleared, Next 16 + React 19, ESLint 9 flat config +
 golangci clean, **external DB connections** (admin form + dial fields + live
 test-connect + per-connection run-time dialing, backend & FE), and **SSO auth via
 HttpOnly cookie** (login sets it, logout clears it). All merged to `main`.
-**Backlog**: a full second-DB integration E2E; real Entra **JWKS** validation for
-prod SSO (today prod trusts a gateway-injected `X-Role`); connections admin UI
-polish. See `docs/spec/09-phase-plan.md` for P2–P4.
+Also shipped: scheduled mail flows (Thai Excel + masking), builder-only db.query
+(pkg/sqlbuilder guards + visual QueryBuilder, no free SQL), connection dropdowns,
+and **Entra ID JWKS validation for prod SSO**. **Backlog**: broader Entra role/
+group-claim mapping + a full second-DB integration E2E in CI. See
+`docs/spec/09-phase-plan.md` for P2–P4.

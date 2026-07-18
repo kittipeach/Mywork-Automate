@@ -19,6 +19,7 @@ import (
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	auditpg "github.com/mywork/automate/apps/automate-api/internal/audit/postgres"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
+	"github.com/mywork/automate/apps/automate-api/internal/auth/entra"
 	"github.com/mywork/automate/apps/automate-api/internal/httpapi"
 	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/preview"
@@ -72,8 +73,13 @@ const devJWTSecret = "dev-only-insecure-jwt-secret-change-me" //nolint:gosec // 
 // permitted. When disabled it returns a zero AuthConfig; the RBAC middleware
 // then falls back to the X-Role header / defaultRole.
 func buildAuthConfig(cfg config.Config, logger *slog.Logger) (httpapi.AuthConfig, error) {
+	// Entra SSO (prod) is independent of local auth: it validates real Entra ID
+	// tokens against the tenant JWKS. Enabled whenever configured, including in
+	// protected environments where local auth is off.
+	entraV := buildEntra(logger)
+
 	if !cfg.AuthLocalEnabled || cfg.IsProtectedEnv() {
-		return httpapi.AuthConfig{Logger: logger}, nil
+		return httpapi.AuthConfig{Logger: logger, Entra: entraV}, nil
 	}
 
 	secret := os.Getenv("AUTH_JWT_SECRET")
@@ -91,7 +97,31 @@ func buildAuthConfig(cfg config.Config, logger *slog.Logger) (httpapi.AuthConfig
 	}
 	svc := auth.NewService(users, tokens, auth.NewLockoutTracker(nil))
 	logger.Info("local auth enabled", "devAdmin", auth.DevAdminEmail)
-	return httpapi.AuthConfig{Service: svc, Logger: logger}, nil
+	return httpapi.AuthConfig{Service: svc, Logger: logger, Entra: entraV}, nil
+}
+
+// buildEntra constructs the Entra verifier from the environment, returning nil
+// when not configured. ENTRA_TENANT_ID is a shortcut that derives the standard
+// v2.0 issuer + JWKS URL; ENTRA_JWKS_URL / ENTRA_ISSUER override them.
+func buildEntra(logger *slog.Logger) *entra.Verifier {
+	cfg := entra.Config{
+		JWKSURL:  os.Getenv("ENTRA_JWKS_URL"),
+		Issuer:   os.Getenv("ENTRA_ISSUER"),
+		Audience: os.Getenv("ENTRA_AUDIENCE"),
+	}
+	if tenant := os.Getenv("ENTRA_TENANT_ID"); tenant != "" {
+		if cfg.JWKSURL == "" {
+			cfg.JWKSURL = "https://login.microsoftonline.com/" + tenant + "/discovery/v2.0/keys"
+		}
+		if cfg.Issuer == "" {
+			cfg.Issuer = "https://login.microsoftonline.com/" + tenant + "/v2.0"
+		}
+	}
+	v := entra.New(cfg)
+	if v != nil {
+		logger.Info("Entra SSO enabled", "issuer", cfg.Issuer, "audience", cfg.Audience)
+	}
+	return v
 }
 
 func main() {

@@ -17,12 +17,12 @@ type JSONSchema struct {
 	// Properties is a pointer so a nil (leaf schema) is omitted while a non-nil
 	// empty map serialises as `{}` (the TS trigger.manual schema is
 	// `properties: {}`, which omitempty on a plain map would wrongly drop).
-	Properties       *map[string]JSONSchema                      `json:"properties,omitempty"`
-	Required         []string                                    `json:"required,omitempty"`
-	Enum             []string                                    `json:"enum,omitempty"`
-	EnumLabels       []string                                    `json:"enumLabels,omitempty"`
-	Default          any                                         `json:"default,omitempty"`
-	Format           string                                      `json:"format,omitempty"`
+	Properties *map[string]JSONSchema `json:"properties,omitempty"`
+	Required   []string               `json:"required,omitempty"`
+	Enum       []string               `json:"enum,omitempty"`
+	EnumLabels []string               `json:"enumLabels,omitempty"`
+	Default    any                    `json:"default,omitempty"`
+	Format     string                 `json:"format,omitempty"`
 	// ConnectionType narrows a format:"connection" field to one connection type
 	// (e.g. "postgres", "sftp") so the UI dropdown only offers matching ones.
 	ConnectionType   string                                      `json:"connectionType,omitempty"`

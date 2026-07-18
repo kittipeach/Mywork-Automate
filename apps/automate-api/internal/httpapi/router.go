@@ -14,6 +14,7 @@ import (
 
 	"github.com/mywork/automate/apps/automate-api/internal/audit"
 	"github.com/mywork/automate/apps/automate-api/internal/auth"
+	"github.com/mywork/automate/apps/automate-api/internal/auth/entra"
 	"github.com/mywork/automate/apps/automate-api/internal/notify"
 	"github.com/mywork/automate/apps/automate-api/internal/preview"
 	"github.com/mywork/automate/apps/automate-api/internal/runner"
@@ -35,6 +36,8 @@ const APIBasePath = "/api/automate/v1"
 type AuthConfig struct {
 	Service *auth.Service
 	Logger  *slog.Logger
+	// Entra validates Microsoft Entra ID access tokens (prod SSO). nil disables it.
+	Entra *entra.Verifier
 }
 
 // NewRouter builds the Gin engine for the given config, data store, flow Runner,
@@ -86,7 +89,7 @@ func NewRouter(cfg config.Config, st store.Store, run runner.Runner, auditSvc au
 		opt(h)
 	}
 
-	deps := authDeps{service: authCfg.Service, audit: auditSvc, protected: cfg.IsProtectedEnv()}
+	deps := authDeps{service: authCfg.Service, audit: auditSvc, entra: authCfg.Entra, protected: cfg.IsProtectedEnv()}
 	if authCfg.Logger != nil {
 		log := authCfg.Logger
 		deps.log = func(msg string, kv ...any) { log.Info(msg, kv...) }
