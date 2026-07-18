@@ -156,6 +156,9 @@ Temporal UI: <http://localhost:8233> · Mailhog UI: <http://localhost:8025>.
 | `SMTP_ADDR` / `SMTP_FROM` | `localhost:1025` | worker | Email delivery (Mailhog in dev). |
 | `SFTP_ADDR` / `SFTP_USER` / `SFTP_PASSWORD` | empty | worker | MFT/SFTP delivery target (empty ⇒ delivery.mft errors clearly). |
 | `SECRETS_FILE` | `secrets.local.yaml` | api, worker | Dev secret store (gitignored YAML). Holds external-DB connection passwords; Key Vault replaces it in prod. |
+| `ENTRA_TENANT_ID` | — | api | Entra (Azure AD) tenant — derives the v2.0 issuer + JWKS URL. Enables prod SSO. |
+| `ENTRA_AUDIENCE` | — | api | The API's application (client) id / `api://…` URI the token must be issued for. |
+| `ENTRA_ISSUER` / `ENTRA_JWKS_URL` | derived | api | Override the issuer / JWKS URL (otherwise derived from the tenant id). |
 | `NEXT_PUBLIC_API_BASE` | `/api/automate/v1` | web (build/dev) | Point the UI at the real API, e.g. `http://localhost:8080/api/automate/v1`. |
 
 ## 6b. Configure an external database connection (admin)
@@ -193,8 +196,14 @@ absent, the **`mw_access_token` cookie** — so an SSO-authenticated browser ses
 works without a JS-managed header. `POST /auth/local/login` sets that cookie
 (HttpOnly, SameSite=Lax, `Secure` in sit/uat/prod) in addition to returning the
 token; `POST /auth/logout` clears it. In protected environments a request that
-resolves no identity **fails closed with 401** (front the API with a gateway that
-validates the user and injects a trusted `X-Role`, or issues the app JWT cookie).
+resolves no identity **fails closed with 401**.
+
+For **production SSO**, set `ENTRA_TENANT_ID` + `ENTRA_AUDIENCE`: the API then
+validates real Microsoft Entra ID access tokens (RS256, verified against the
+tenant JWKS, issuer/audience/expiry enforced) presented as a Bearer token or the
+`mw_access_token` cookie, mapping the token's `roles` app-role claim to the
+caller's authz role. This is independent of local auth and works even in protected
+envs where local login is disabled.
 
 ## 7. Deploying to a protected environment (sit/uat/prod)
 

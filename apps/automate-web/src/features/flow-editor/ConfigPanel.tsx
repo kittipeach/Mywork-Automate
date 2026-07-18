@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
 import { SchemaForm } from '@/features/node-config';
 import { QueryBuilder } from '@/features/connections/QueryBuilder';
 import { emptySpec, type QuerySpec } from '@/features/connections/queryBuilderSpec';
+import { useConnections } from '@/api/hooks';
 import { nodeIcon } from './nodeIcons';
 import { upstreamNodeNames } from './graph';
 import { useFlowStore } from './store';
@@ -26,6 +27,9 @@ export function ConfigPanel() {
   const availableNodes = useFlowStore((s) =>
     s.selectedNodeId ? upstreamNodeNames(s.selectedNodeId, s.nodes, s.edges) : [],
   );
+  // Live connections populate the format:'connection' dropdowns (dynamic, no free text).
+  const connectionsQ = useConnections();
+  const connectionOptions = (connectionsQ.data?.connections ?? []).map((c) => ({ value: c.id, label: `${c.name} (${c.type})`, type: c.type }));
 
   if (!selectedNodeId || !node) {
     return (
@@ -76,6 +80,7 @@ export function ConfigPanel() {
             schema={def.schema}
             value={config}
             availableNodes={availableNodes}
+            connectionOptions={connectionOptions}
             onChange={(v) => setNodeConfig(selectedNodeId, v)}
           />
         )}
